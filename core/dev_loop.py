@@ -231,6 +231,7 @@ async def run_dev_phase(
     git_handler: GitHandler | None = None,
     remote_vcs: RemoteVCS | None = None,
     max_iterations: int = 15,
+    feedback: str | None = None,
 ) -> None:
     """Execute the Phase 4 Dev-Agent Loop.
 
@@ -290,6 +291,10 @@ async def run_dev_phase(
             f"### Repository Context & Guidelines:\n{repo_context}\n\n"
             f"### Active Branch:\n{state.branch_name}\n\n"
         )
+        if feedback:
+            user_prompt += (
+                f"### Code Review Feedback (Must Address All Blockers & Warnings):\n{feedback}\n\n"
+            )
         if history:
             user_prompt += "### Previous Actions and Results:\n" + "\n".join(history[-6:]) + "\n\n"
 
@@ -339,7 +344,10 @@ async def run_dev_phase(
         has_uncommitted = await git.has_uncommitted_changes()
         if has_uncommitted:
             logger.info("Staging and committing remaining uncommitted changes.")
-            commit_msg = f"feat: implement {spec_title.lower()}"
+            if feedback:
+                commit_msg = f"fix(review): address review findings for {spec_title.lower()}"
+            else:
+                commit_msg = f"feat: implement {spec_title.lower()}"
             await git.commit_changes(commit_msg)
 
         # Step 5: Push branch to remote
@@ -349,25 +357,31 @@ async def run_dev_phase(
         except Exception as push_exc:
             logger.warning("Git push encountered an issue: %s", push_exc)
 
-        # Step 6: Create Draft PR / MR
-        logger.info("Creating draft PR/MR for branch '%s'.", state.branch_name)
-        pr_title = f"feat: {spec_title}"
-        pr_body = (
-            f"## Automated Implementation: {spec_title}\n\n"
-            f"### Specification\n{spec}\n\n"
-            "---\n*Created automatically by MergeFlow Orchestrator.*"
-        )
-        try:
-            pr_url = await vcs.create_draft_pr(
-                title=pr_title,
-                body=pr_body,
-                branch=state.branch_name or "main",
+        # Step 6: Create Draft PR / MR (only if not already created)
+        if "pr_url" not in state.metadata:
+            logger.info("Creating draft PR/MR for branch '%s'.", state.branch_name)
+            pr_title = f"feat: {spec_title}"
+            pr_body = (
+                f"## Automated Implementation: {spec_title}\n\n"
+                f"### Specification\n{spec}\n\n"
+                "---\n*Created automatically by MergeFlow Orchestrator.*"
             )
-            state.metadata["pr_url"] = pr_url
-            logger.info("Draft PR created successfully: %s", pr_url)
-        except Exception as pr_exc:
-            logger.warning("Remote VCS draft PR creation failed or skipped: %s", pr_exc)
-            state.metadata["pr_error"] = str(pr_exc)
+            try:
+                pr_url = await vcs.create_draft_pr(
+                    title=pr_title,
+                    body=pr_body,
+                    branch=state.branch_name or "main",
+                )
+                state.metadata["pr_url"] = pr_url
+                logger.info("Draft PR created successfully: %s", pr_url)
+            except Exception as pr_exc:
+                logger.warning("Remote VCS draft PR creation failed or skipped: %s", pr_exc)
+                state.metadata["pr_error"] = str(pr_exc)
+        else:
+            logger.info(
+                "Draft PR already exists at %s; changes pushed.",
+                state.metadata["pr_url"],
+            )
 
         # Transition to CI_LOOP phase
         state.transition_to(WorkflowPhase.CI_LOOP)
@@ -376,3 +390,6 @@ async def run_dev_phase(
     except Exception as exc:
         state.transition_to(WorkflowPhase.FAILED)
         raise DevLoopError(f"Error during final commit, push, or PR creation: {exc}") from exc
+
+
+run_dev_loop = run_dev_phase

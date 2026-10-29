@@ -21,6 +21,7 @@ from core.dev_loop import (
     DevAgentStep,
     DevLoopError,
     load_developer_prompt,
+    run_dev_loop,
     run_dev_phase,
 )
 from core.healing_loop import (
@@ -28,6 +29,21 @@ from core.healing_loop import (
     format_ci_commit_message,
     load_ci_healing_prompt,
     run_ci_healing_loop,
+)
+from core.consensus import (
+    ConsensusCircuitBreakerError,
+    ConsensusDecision,
+    ConsensusError,
+    ConsensusStatus,
+    evaluate_review_consensus,
+    format_feedback_json,
+    format_review_feedback,
+    run_consensus_phase,
+)
+from core.orchestrator import (
+    Orchestrator,
+    OrchestratorError,
+    run_orchestrator,
 )
 from core.models import (
     Finding,
@@ -105,6 +121,7 @@ __all__ = [
     "DevLoopError",
     "load_developer_prompt",
     "run_dev_phase",
+    "run_dev_loop",
     "run_ci_healing_loop",
     "load_ci_healing_prompt",
     "format_ci_commit_message",
@@ -118,4 +135,15 @@ __all__ = [
     "is_overall_approved",
     "format_review_report",
     "run_review_phase",
+    "ConsensusStatus",
+    "ConsensusDecision",
+    "ConsensusError",
+    "ConsensusCircuitBreakerError",
+    "evaluate_review_consensus",
+    "format_feedback_json",
+    "format_review_feedback",
+    "run_consensus_phase",
+    "Orchestrator",
+    "OrchestratorError",
+    "run_orchestrator",
 ]
