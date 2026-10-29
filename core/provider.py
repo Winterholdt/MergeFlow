@@ -301,19 +301,26 @@ class APIProvider(BaseLLMProvider):
 
 
 def get_provider(
-    provider_type: str | None = None,
+    provider_type: str | AppConfig | None = None,
     config: AppConfig | None = None,
 ) -> BaseLLMProvider:
     """Factory creating configured LLM provider instances.
 
     Args:
-        provider_type: Provider identifier ('cli', 'api', 'claude', 'antigravity').
-                       If None, defaults to config.providers.default_provider.
+        provider_type: Provider identifier ('cli', 'api', 'claude', 'antigravity') or AppConfig instance.
+                       If None or passed as AppConfig, defaults to config.providers.default_provider.
         config: Application configuration. If None, loaded via load_config().
 
     Returns:
         Instance of BaseLLMProvider.
     """
+    if isinstance(provider_type, AppConfig):
+        if isinstance(config, str):
+            provider_type, config = config, provider_type
+        else:
+            config = provider_type
+            provider_type = None
+
     app_config = config or load_config()
     target = (provider_type or app_config.providers.default_provider).lower()
 
@@ -321,12 +328,12 @@ def get_provider(
         return CLIProvider(app_config.providers.cli)
     elif target == "claude":
         return CLIProvider(app_config.providers.claude)
-    elif target == "antigravity":
+    elif target in ("antigravity", "agy"):
         return CLIProvider(app_config.providers.antigravity)
     elif target == "api":
         return APIProvider(app_config.providers.api)
     else:
         raise ValueError(
-            f"Unknown provider type: '{provider_type}'. "
+            f"Unknown provider type: '{provider_type or target}'. "
             "Supported types are 'cli', 'api', 'claude', 'antigravity'."
         )

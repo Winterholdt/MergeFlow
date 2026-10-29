@@ -224,5 +224,19 @@ def test_get_provider_factory():
     api_provider = get_provider("api", config)
     assert isinstance(api_provider, APIProvider)
 
+    # Test passing AppConfig as first argument or keyword argument
+    default_provider_pos = get_provider(config)
+    assert isinstance(default_provider_pos, CLIProvider)
+
+    default_provider_kw = get_provider(config=config)
+    assert isinstance(default_provider_kw, CLIProvider)
+
+    reversed_args_provider = get_provider(config, "api")
+    assert isinstance(reversed_args_provider, APIProvider)
+
+    agy_provider = get_provider("agy", config)
+    assert isinstance(agy_provider, CLIProvider)
+    assert agy_provider.config.binary_path == "antigravity"
+
     with pytest.raises(ValueError):
         get_provider("unsupported_type", config)

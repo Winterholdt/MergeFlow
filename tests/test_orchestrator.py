@@ -261,3 +261,31 @@ async def test_orchestrator_halts_on_ci_failure(repo_sandbox: Path, tmp_path: Pa
         final_state = await orchestrator.run("Test feature")
 
     assert final_state.current_phase == WorkflowPhase.FAILED.value
+
+
+@pytest.mark.asyncio
+async def test_run_orchestrator_initializes_provider(tmp_path: Path):
+    """Verify run_orchestrator correctly instantiates provider without AttributeError."""
+    state_file = tmp_path / "state.json"
+    dummy_repo = tmp_path / "repo"
+    dummy_repo.mkdir()
+
+    with (
+        patch("core.orchestrator.Orchestrator.run", new_callable=AsyncMock) as mock_run,
+        patch("core.orchestrator.get_provider") as mock_get_provider,
+    ):
+        mock_provider_instance = MagicMock()
+        mock_get_provider.return_value = mock_provider_instance
+        mock_run.return_value = WorkflowState(task_id="TEST-1", raw_requirements="test")
+
+        await run_orchestrator(
+            requirements="Test requirements",
+            repo_path=dummy_repo,
+            state_path=state_file,
+            provider_type="claude",
+        )
+
+        mock_get_provider.assert_called_once()
+        _, kwargs = mock_get_provider.call_args
+        assert kwargs["provider_type"] == "claude"
+        assert isinstance(kwargs["config"], AppConfig)

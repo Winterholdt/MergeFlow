@@ -115,7 +115,7 @@ class Orchestrator:
         self.skill_manager = skill_manager or SkillManager(config=self.config.skills)
 
         # Initialize LLM Provider (Phase 1)
-        self.provider = provider or get_provider(self.config)
+        self.provider = provider or get_provider(config=self.config)
 
         # Initialize Security Gatekeeper (Phase 2)
         self.gatekeeper = gatekeeper or Gatekeeper(repo_root=self.repo_path)
@@ -436,7 +436,7 @@ async def run_orchestrator(
     if provider_type:
         config.providers.default_provider = provider_type
 
-    provider = get_provider(config)
+    provider = get_provider(provider_type=provider_type, config=config)
     orchestrator = Orchestrator(
         config=config,
         provider=provider,

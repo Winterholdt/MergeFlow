@@ -4,7 +4,7 @@ log_level: "INFO"
 providers:
   default_provider: "cli"
   cli:
-    binary_path: "claude"
+    binary_path: "agy"
     command_args:
       - "-p"
     timeout_seconds: 300.0

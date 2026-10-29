@@ -13,8 +13,9 @@ from core.config import (
 )
 
 
-def test_default_config_instantiation():
+def test_default_config_instantiation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Verify default configuration values."""
+    monkeypatch.chdir(tmp_path)
     config = AppConfig()
     assert config.environment == "development"
     assert config.log_level == "INFO"
