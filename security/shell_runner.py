@@ -7,7 +7,10 @@ supporting timeouts, real-time output streaming, and structured CommandResult ob
 import asyncio
 from collections.abc import Callable
 import logging
+import os
 from pathlib import Path
+import signal
+import subprocess
 import time
 from typing import Any
 
@@ -45,6 +48,37 @@ class CommandResult(BaseModel):
         default=None,
         description="The detailed justification if the command was blocked.",
     )
+
+
+def kill_process_tree(proc: asyncio.subprocess.Process) -> None:
+    """Hard-kill the entire subprocess process tree across OS platforms."""
+    if proc.pid is None:
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except Exception:
+            pass
+    else:
+        try:
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, signal.SIGKILL)
+        except Exception:
+            pass
+
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
 
 
 class ShellRunner:
@@ -94,16 +128,18 @@ class ShellRunner:
         self,
         command: str,
         cwd: Path,
-        timeout_seconds: int = 120,
+        timeout_seconds: int = 180,
         task_goal: str = "",
+        state: Any = None,
     ) -> CommandResult:
         """Validates and executes a shell command within the repository sandbox.
 
         Args:
             command: Shell command line to run.
             cwd: Working directory (must reside within repository root).
-            timeout_seconds: Maximum allowed execution duration before SIGKILL.
+            timeout_seconds: Maximum allowed execution duration before SIGKILL (default: 180s).
             task_goal: Optional task description context for LLM auditing.
+            state: Optional WorkflowState instance to record errors on timeout.
 
         Returns:
             CommandResult with exit code, outputs, timing, and gatekeeper verdict.
@@ -128,17 +164,29 @@ class ShellRunner:
                 block_reason=gate_decision.reason,
             )
 
-        # Step 2: Asynchronous subprocess execution
+        # Step 2: Asynchronous subprocess execution with enforced non-interactive environment
+        env = os.environ.copy()
+        env["DEBIAN_FRONTEND"] = "noninteractive"
+        env["CI"] = "true"
+        env["GIT_TERMINAL_PROMPT"] = "0"
+
         start_time = time.perf_counter()
         stdout_lines: list[str] = []
         stderr_lines: list[str] = []
 
         try:
+            # On POSIX, start new session so killpg terminates process tree
+            extra_kwargs: dict[str, Any] = {}
+            if os.name != "nt":
+                extra_kwargs["start_new_session"] = True
+
             proc = await asyncio.create_subprocess_shell(
                 command,
                 cwd=str(cwd_path),
+                env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                **extra_kwargs,
             )
 
             assert proc.stdout is not None
@@ -162,15 +210,12 @@ class ShellRunner:
                 if hasattr(proc, "_transport") and proc._transport is not None:
                     proc._transport.close()
             except asyncio.TimeoutError:
-                logger.error("Command '%s' timed out after %ds. Terminating process...", command, timeout_seconds)
-                try:
-                    proc.terminate()
-                    await asyncio.sleep(0.2)
-                    if proc.returncode is None:
-                        proc.kill()
-                    await proc.wait()
-                except (ProcessLookupError, OSError):
-                    pass
+                logger.error(
+                    "Command '%s' timed out after %ds. Terminating process tree...",
+                    command,
+                    timeout_seconds,
+                )
+                kill_process_tree(proc)
 
                 # Cancel and cleanly await pending stream tasks
                 stdout_task.cancel()
@@ -179,6 +224,23 @@ class ShellRunner:
 
                 duration = time.perf_counter() - start_time
                 stderr_lines.append(f"\n[ERROR] Command timed out after {timeout_seconds} seconds.")
+
+                # Record error finding in state if state is provided
+                if state is not None:
+                    try:
+                        from core.models import Finding, Severity
+
+                        finding = Finding(
+                            file="process:timeout",
+                            severity=Severity.BLOCKER,
+                            issue=f"Command '{command}' timed out after {timeout_seconds}s and process tree was killed.",
+                            suggestion="Ensure commands are non-interactive and avoid deadlocks or unbounded loops.",
+                        )
+                        state.add_finding(finding)
+                        state.metadata["timeout_error"] = f"Command '{command}' timed out after {timeout_seconds}s"
+                    except Exception as err:
+                        logger.debug("Failed to add timeout finding to state: %s", err)
+
                 return CommandResult(
                     exit_code=124,
                     stdout="".join(stdout_lines),
@@ -214,18 +276,20 @@ class ShellRunner:
 async def run_command(
     command: str,
     cwd: Path,
-    timeout_seconds: int = 120,
+    timeout_seconds: int = 180,
     gatekeeper: Gatekeeper | None = None,
     task_goal: str = "",
+    state: Any = None,
 ) -> CommandResult:
     """Convenience function satisfying the required run_command interface.
 
     Args:
         command: Shell command line to run.
         cwd: Working directory (must be within repo root).
-        timeout_seconds: Execution timeout limit.
+        timeout_seconds: Execution timeout limit (default: 180s).
         gatekeeper: Optional pre-configured Gatekeeper.
         task_goal: Optional task context for LLM auditing.
+        state: Optional WorkflowState instance to record errors on timeout.
 
     Returns:
         Structured CommandResult.
@@ -236,4 +300,5 @@ async def run_command(
         cwd=cwd,
         timeout_seconds=timeout_seconds,
         task_goal=task_goal,
+        state=state,
     )

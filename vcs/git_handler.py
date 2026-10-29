@@ -8,10 +8,12 @@ Provides asynchronous Git operations using native asyncio subprocesses:
 """
 
 import asyncio
+from collections.abc import Callable
 import logging
 from pathlib import Path
 import re
 import shutil
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -95,17 +97,110 @@ def ensure_conventional_commit(message: str, default_type: str = "feat") -> str:
     return f"{default_type}: {cleaned}"
 
 
+DEFAULT_MAX_DIFF_LINES = 4000
+DEFAULT_MAX_DIFF_WORDS = 20000
+
+TRUNCATION_NOTE = (
+    "> [!WARNING]\n"
+    "> HINWEIS: Der Diff hat das Token-Limit überschritten (über 4.000 Zeilen oder 20.000 Wörter) "
+    "und wurde dateibasiert gekürzt. Enthalten ist die Übersicht (`git diff --stat`) sowie die Diffs der geänderten Kern-Dateien."
+)
+
+
+def split_diff_by_files(diff_text: str) -> list[tuple[str, str]]:
+    """Splits unified diff output into a list of (filename, file_diff) pairs."""
+    chunks: list[tuple[str, str]] = []
+    current_file = ""
+    current_lines: list[str] = []
+
+    for line in diff_text.splitlines(keepends=True):
+        if line.startswith("diff --git "):
+            if current_file:
+                chunks.append((current_file, "".join(current_lines)))
+            match = re.search(r"diff --git a/(.*?) b/", line)
+            current_file = match.group(1) if match else line.strip()
+            current_lines = [line]
+        else:
+            current_lines.append(line)
+
+    if current_file:
+        chunks.append((current_file, "".join(current_lines)))
+
+    return chunks
+
+
+def is_core_file(filename: str) -> bool:
+    """Determine whether a file is a core source file versus lockfile/generated asset."""
+    lower = filename.lower()
+    low_priority_patterns = [
+        "lock", "-lock.json", ".lock", "package-lock", "yarn.lock", "pnpm-lock",
+        ".min.", ".map", ".svg", ".png", ".jpg", ".jpeg", ".ico", ".pdf",
+        "dist/", "build/", ".gen.", "vendor/"
+    ]
+    return not any(pat in lower for pat in low_priority_patterns)
+
+
+def truncate_or_split_diff(
+    diff: str,
+    stat: str = "",
+    max_lines: int = DEFAULT_MAX_DIFF_LINES,
+    max_words: int = DEFAULT_MAX_DIFF_WORDS,
+) -> tuple[str, bool]:
+    """Truncates or splits diff by file if line/word limits are exceeded."""
+    lines = diff.splitlines()
+    words = diff.split()
+    if len(lines) <= max_lines and len(words) <= max_words:
+        return diff, False
+
+    chunks = split_diff_by_files(diff)
+    if not chunks:
+        truncated = "\n".join(lines[:max_lines])
+        stat_block = f"### Git Diff --stat\n```\n{stat.strip()}\n```\n\n" if stat else ""
+        return f"{TRUNCATION_NOTE}\n\n{stat_block}### Gekürzter Diff:\n{truncated}", True
+
+    core_chunks = [c for c in chunks if is_core_file(c[0])]
+    other_chunks = [c for c in chunks if not is_core_file(c[0])]
+    ordered_chunks = core_chunks + other_chunks
+
+    accumulated: list[str] = []
+    cur_lines = 0
+    cur_words = 0
+
+    budget_lines = max_lines - 50
+    budget_words = max_words - 200
+
+    for fname, chunk in ordered_chunks:
+        c_lines = chunk.count("\n") + 1
+        c_words = len(chunk.split())
+        if cur_lines + c_lines > budget_lines or cur_words + c_words > budget_words:
+            continue
+        accumulated.append(chunk)
+        cur_lines += c_lines
+        cur_words += c_words
+
+    body = "".join(accumulated) if accumulated else "".join(c[1] for c in chunks[:1])
+    stat_block = f"### Git Diff --stat\n```\n{stat.strip()}\n```\n\n" if stat else ""
+    final_diff = f"{TRUNCATION_NOTE}\n\n{stat_block}### Diffs der geänderten Kern-Dateien:\n{body}"
+    return final_diff, True
+
+
 class GitHandler:
     """Asynchronous Git client operating inside a specific repository."""
 
-    def __init__(self, repo_path: Path | str = ".") -> None:
+    def __init__(
+        self,
+        repo_path: Path | str = ".",
+        on_commit_callback: Callable[[str], Any] | None = None,
+    ) -> None:
         """Initialize GitHandler for a given repository path.
 
         Args:
             repo_path: Root path of the git repository.
+            on_commit_callback: Optional callback invoked whenever changes are committed.
         """
         self.repo_path = Path(repo_path).resolve()
         self._git_bin = shutil.which("git") or "git"
+        self.on_commit_callback = on_commit_callback
 
     async def _run_git(
         self,
@@ -228,13 +323,46 @@ class GitHandler:
 
         return branch_name
 
-    async def get_diff(self, target_branch: str = "main") -> str:
+    async def get_diff_stat(self, target_branch: str = "main") -> str:
+        """Get git diff --stat against target branch."""
+        code, stdout, _ = await self._run_git(
+            "diff",
+            "--stat",
+            f"origin/{target_branch}...HEAD",
+            check=False,
+        )
+        if code == 0 and stdout.strip():
+            return stdout.strip()
+
+        code, stdout, _ = await self._run_git(
+            "diff",
+            "--stat",
+            f"{target_branch}...HEAD",
+            check=False,
+        )
+        if code == 0 and stdout.strip():
+            return stdout.strip()
+
+        code, stdout, _ = await self._run_git("diff", "--stat", "HEAD", check=False)
+        return stdout.strip() if code == 0 else ""
+
+    async def get_diff(
+        self,
+        target_branch: str = "main",
+        max_lines: int | None = None,
+        max_words: int | None = None,
+        protect_tokens: bool = False,
+    ) -> str:
         """Get git diff between target_branch and HEAD (origin/<target_branch>...HEAD).
 
         Falls back to local target_branch...HEAD or HEAD~1 if remote ref is unavailable.
+        Optionally applies token protection by splitting or truncating if limits are exceeded.
 
         Args:
             target_branch: Base branch to compare against (default: 'main').
+            max_lines: Max diff lines before truncation/splitting.
+            max_words: Max diff words before truncation/splitting.
+            protect_tokens: If True, enforces DEFAULT_MAX_DIFF_LINES / DEFAULT_MAX_DIFF_WORDS.
 
         Returns:
             Unified diff output as a string.
@@ -245,24 +373,152 @@ class GitHandler:
             f"origin/{target_branch}...HEAD",
             check=False,
         )
+        raw_diff = ""
         if code == 0:
-            return stdout
+            raw_diff = stdout
+        else:
+            # 2. Fallback to local target_branch...HEAD
+            code, stdout, _ = await self._run_git(
+                "diff",
+                f"{target_branch}...HEAD",
+                check=False,
+            )
+            if code == 0:
+                raw_diff = stdout
+            else:
+                # 3. Fallback to diff of uncommitted changes or HEAD
+                code, stdout, _ = await self._run_git("diff", "HEAD", check=False)
+                if code == 0:
+                    raw_diff = stdout
 
-        # 2. Fallback to local target_branch...HEAD
+        if not raw_diff:
+            return ""
+
+        effective_max_lines = max_lines if max_lines is not None else (DEFAULT_MAX_DIFF_LINES if protect_tokens else None)
+        effective_max_words = max_words if max_words is not None else (DEFAULT_MAX_DIFF_WORDS if protect_tokens else None)
+
+        if effective_max_lines is not None or effective_max_words is not None:
+            stat = await self.get_diff_stat(target_branch=target_branch)
+            lim_lines = effective_max_lines or DEFAULT_MAX_DIFF_LINES
+            lim_words = effective_max_words or DEFAULT_MAX_DIFF_WORDS
+            truncated_diff, _ = truncate_or_split_diff(
+                raw_diff,
+                stat=stat,
+                max_lines=lim_lines,
+                max_words=lim_words,
+            )
+            return truncated_diff
+
+        return raw_diff
+
+    async def get_review_diff(
+        self,
+        target_branch: str = "main",
+        max_lines: int = DEFAULT_MAX_DIFF_LINES,
+        max_words: int = DEFAULT_MAX_DIFF_WORDS,
+    ) -> tuple[str, bool]:
+        """Fetch git diff specifically formatted and guarded for code reviewers.
+
+        Reviewers standardly receive origin/<target_branch>...HEAD with token protection.
+
+        Args:
+            target_branch: Base branch (default: 'main').
+            max_lines: Max diff lines before splitting.
+            max_words: Max diff words before splitting.
+
+        Returns:
+            Tuple of (diff_content: str, was_truncated: bool).
+        """
         code, stdout, _ = await self._run_git(
             "diff",
-            f"{target_branch}...HEAD",
+            f"origin/{target_branch}...HEAD",
             check=False,
         )
+        raw_diff = ""
         if code == 0:
-            return stdout
+            raw_diff = stdout
+        else:
+            code, stdout, _ = await self._run_git("diff", f"{target_branch}...HEAD", check=False)
+            raw_diff = stdout if code == 0 else ""
 
-        # 3. Fallback to diff of uncommitted changes or HEAD
-        code, stdout, _ = await self._run_git("diff", "HEAD", check=False)
-        if code == 0:
-            return stdout
+        if not raw_diff:
+            code, stdout, _ = await self._run_git("diff", "HEAD", check=False)
+            raw_diff = stdout if code == 0 else ""
 
-        return ""
+        if not raw_diff:
+            return "", False
+
+        stat = await self.get_diff_stat(target_branch=target_branch)
+        return truncate_or_split_diff(
+            raw_diff,
+            stat=stat,
+            max_lines=max_lines,
+            max_words=max_words,
+        )
+
+    async def check_scope_drift(
+        self,
+        target_branch: str = "main",
+        max_allowed_deletions: int = 20,
+        max_total_changes: int = 500,
+    ) -> tuple[bool, str]:
+        """Inspect git diff --stat against target branch for signs of scope drift.
+
+        Checks whether files were deleted or disproportionately many lines were altered.
+
+        Returns:
+            Tuple of (suspected_scope_drift: bool, reason_or_summary: str).
+        """
+        stat = await self.get_diff_stat(target_branch=target_branch)
+
+        # Check git status for deleted files
+        code, status_out, _ = await self._run_git("status", "--porcelain", check=False)
+        deleted_files: list[str] = []
+        for line in status_out.splitlines():
+            line_str = line.strip()
+            if line_str.startswith("D ") or line_str.startswith(" D "):
+                deleted_files.append(line_str.split()[-1])
+
+        code_d, diff_d, _ = await self._run_git(
+            "diff",
+            "--name-only",
+            "--diff-filter=D",
+            f"origin/{target_branch}...HEAD",
+            check=False,
+        )
+        if code_d == 0 and diff_d.strip():
+            for df in diff_d.splitlines():
+                if df.strip() and df.strip() not in deleted_files:
+                    deleted_files.append(df.strip())
+
+        stat_summary_match = re.search(
+            r"(\d+)\s+files? changed(?:,\s+(\d+)\s+insertions?\(\+\))?(?:,\s+(\d+)\s+deletions?\(-\))?",
+            stat,
+        )
+        total_insertions = 0
+        total_deletions = 0
+        files_changed = 0
+        if stat_summary_match:
+            files_changed = int(stat_summary_match.group(1))
+            total_insertions = int(stat_summary_match.group(2) or 0)
+            total_deletions = int(stat_summary_match.group(3) or 0)
+
+        drift_reasons: list[str] = []
+        if deleted_files:
+            drift_reasons.append(f"Dateien gelöscht ({len(deleted_files)}): {', '.join(deleted_files[:3])}")
+        elif total_deletions > max_allowed_deletions:
+            drift_reasons.append(f"Hohe Anzahl an Löschungen: {total_deletions} Zeilen gelöscht")
+
+        total_lines = total_insertions + total_deletions
+        if total_lines > max_total_changes:
+            drift_reasons.append(
+                f"Unverhältnismäßig viele Zeilen verändert ({total_lines} Zeilen in {files_changed} Dateien)"
+            )
+
+        if drift_reasons:
+            reason_msg = "; ".join(drift_reasons)
+            return True, reason_msg
+        return False, ""
 
     async def has_uncommitted_changes(self) -> bool:
         """Check whether there are unstaged or uncommitted changes.
@@ -318,7 +574,17 @@ class GitHandler:
 
         # Return new HEAD commit hash
         _, stdout, _ = await self._run_git("rev-parse", "HEAD")
-        return stdout.strip()
+        commit_hash = stdout.strip()
+
+        if self.on_commit_callback:
+            try:
+                res = self.on_commit_callback(commit_hash)
+                if asyncio.iscoroutine(res):
+                    await res
+            except Exception as e:
+                logger.warning("Error in on_commit callback: %s", e)
+
+        return commit_hash
 
     async def push_branch(
         self,

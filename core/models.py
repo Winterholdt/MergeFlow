@@ -19,6 +19,7 @@ class WorkflowPhase(str, Enum):
     CI_LOOP = "CI_LOOP"
     REVIEW = "REVIEW"
     CONSENSUS = "CONSENSUS"
+    HUMAN_INTERVENTION_REQUIRED = "HUMAN_INTERVENTION_REQUIRED"
     DONE = "DONE"
     FAILED = "FAILED"
 
@@ -365,7 +366,7 @@ class WorkflowState(BaseModel):
         self.findings.clear()
 
     def save_to_file(self, path: Path | str) -> Path:
-        """Serialize and persist workflow state to a JSON file.
+        """Serialize and persist workflow state to a JSON file atomically.
 
         Args:
             path: Target file path.
@@ -375,7 +376,9 @@ class WorkflowState(BaseModel):
         """
         target = Path(path).resolve()
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        temp_target = target.with_suffix(f"{target.suffix}.tmp.{uuid.uuid4().hex[:6]}")
+        temp_target.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        temp_target.replace(target)
         return target
 
     @classmethod

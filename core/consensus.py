@@ -382,11 +382,13 @@ async def run_consensus_phase(
         # Circuit-Breaker Check
         if state.review_retry_count >= resolved_max_retries:
             logger.error(
-                "CIRCUIT-BREAKER TRIGGERED: Maximum review retries (%d) exceeded. Aborting workflow.",
+                "CIRCUIT-BREAKER TRIGGERED: Maximum review retries (%d) exceeded. Aborting automatic loop.",
                 resolved_max_retries,
             )
-            state.transition_to(WorkflowPhase.FAILED)
+            state.transition_to(WorkflowPhase.HUMAN_INTERVENTION_REQUIRED)
             state.metadata["review_circuit_breaker"] = True
+            state.metadata["circuit_breaker_triggered"] = True
+            state.metadata["failed_phase"] = WorkflowPhase.REVIEW.value
             state.metadata["unresolved_blockers"] = len(blockers)
             state.metadata["unresolved_warnings"] = len(warnings)
 
@@ -402,30 +404,130 @@ async def run_consensus_phase(
             )
             state.add_finding(failure_finding)
 
+            # Build consolidated conflict report
+            conflict_lines = [
+                f"[bold red]CIRCUIT-BREAKER AUSGELÖST: Review-Ping-Pong-Bremse aktiviert![/bold red]",
+                f"Nach {resolved_max_retries} Review-Runden konnten folgende Kritikpunkte nicht behoben werden:\n",
+            ]
+            if blockers:
+                conflict_lines.append("[bold red]Blocker-Punkte:[/bold red]")
+                for b in blockers:
+                    loc = f"{b.file}:{b.line}" if b.line else b.file
+                    conflict_lines.append(f"  • [{loc}] {b.issue}")
+                conflict_lines.append("")
+            if warnings:
+                conflict_lines.append("[bold yellow]Warnungen:[/bold yellow]")
+                for w in warnings:
+                    loc = f"{w.file}:{w.line}" if w.line else w.file
+                    conflict_lines.append(f"  • [{loc}] {w.issue}")
+                conflict_lines.append("")
+
             ui_console.print(
                 Panel(
-                    f"[bold red]Circuit-Breaker ausgelöst:[/bold red] Maximales Re-Review-Limit "
-                    f"({resolved_max_retries}) erreicht.\n"
-                    f"Offene Blocker: {len(blockers)} | Offene Warnings: {len(warnings)}",
-                    title="[bold red]Review-Schleife Abgebrochen[/bold red]",
+                    "\n".join(conflict_lines),
+                    title="[bold red]Konsolidierter Review-Konflikt-Report[/bold red]",
                     border_style="red",
                 )
             )
 
-            return ConsensusDecision(
-                status=ConsensusStatus.REJECTED,
-                approved=False,
-                has_blockers=len(blockers) > 0,
-                has_warnings=len(warnings) > 0,
-                total_findings=len(blockers) + len(warnings) + len(nits),
-                blockers=blockers,
-                warnings=warnings,
-                nits=nits,
-                feedback_markdown=feedback_md,
-                feedback_json=feedback_json,
-                merged=False,
-                message=f"Circuit-breaker triggered: exceeded {resolved_max_retries} review retries.",
-            )
+            prompt_text = "[M]anuell übernehmen / [F]orce Merge versuchen / [A]bbruch: "
+            if input_func is not None:
+                user_choice = input_func(prompt_text).strip().lower()
+            else:
+                try:
+                    user_choice = input(prompt_text).strip().lower()
+                except (EOFError, KeyboardInterrupt, OSError):
+                    user_choice = "a"
+
+            if user_choice in ("m", "manuell", "manual"):
+                ui_console.print(
+                    "[yellow]Manuelle Übernahme gewählt. Workflow pausiert in Phase 'HUMAN_INTERVENTION_REQUIRED'. "
+                    "Nach manuellen Anpassungen kann mit '--resume' fortgesetzt werden.[/yellow]"
+                )
+                return ConsensusDecision(
+                    status=ConsensusStatus.REJECTED,
+                    approved=False,
+                    has_blockers=len(blockers) > 0,
+                    has_warnings=len(warnings) > 0,
+                    total_findings=len(blockers) + len(warnings) + len(nits),
+                    blockers=blockers,
+                    warnings=warnings,
+                    nits=nits,
+                    feedback_markdown=feedback_md,
+                    feedback_json=feedback_json,
+                    merged=False,
+                    message="Workflow paused for human intervention by user choice.",
+                )
+
+            elif user_choice in ("f", "force", "force merge"):
+                ui_console.print("[cyan]Versuche Force Merge...[/cyan]")
+                try:
+                    pr_num = state.metadata.get("pr_number") or extract_pr_number_from_url(state.metadata.get("pr_url"))
+                    exit_code, stdout, stderr = await vcs.merge_pr(
+                        pr_number=pr_num,
+                        auto=False,
+                        squash=True,
+                    )
+                    state.metadata["merged"] = True
+                    state.metadata["merge_mode"] = "force"
+                    state.metadata["merge_output"] = stdout.strip() or stderr.strip()
+                    state.transition_to(WorkflowPhase.DONE)
+
+                    ui_console.print(
+                        Panel(
+                            "[bold green]✓ Force Merge erfolgreich durchgeführt![/bold green]",
+                            title="[bold green]Force Merge Erfolgreich[/bold green]",
+                            border_style="green",
+                        )
+                    )
+                    return ConsensusDecision(
+                        status=ConsensusStatus.APPROVED,
+                        approved=True,
+                        has_blockers=False,
+                        has_warnings=False,
+                        total_findings=len(nits),
+                        nits=nits,
+                        merged=True,
+                        merge_mode="force",
+                        message="Force merge executed successfully.",
+                    )
+                except Exception as exc:
+                    logger.error("Force merge failed: %s", exc)
+                    state.transition_to(WorkflowPhase.FAILED)
+                    state.metadata["merge_error"] = str(exc)
+                    ui_console.print(f"[bold red]Force Merge fehlgeschlagen: {exc}[/bold red]")
+                    return ConsensusDecision(
+                        status=ConsensusStatus.REJECTED,
+                        approved=False,
+                        has_blockers=len(blockers) > 0,
+                        has_warnings=len(warnings) > 0,
+                        total_findings=len(blockers) + len(warnings) + len(nits),
+                        blockers=blockers,
+                        warnings=warnings,
+                        nits=nits,
+                        feedback_markdown=feedback_md,
+                        feedback_json=feedback_json,
+                        merged=False,
+                        message=f"Force merge failed: {exc}",
+                    )
+
+            else:
+                ui_console.print("[bold red]Vorgang durch Benutzer abgebrochen.[/bold red]")
+                state.transition_to(WorkflowPhase.FAILED)
+                return ConsensusDecision(
+                    status=ConsensusStatus.REJECTED,
+                    approved=False,
+                    has_blockers=len(blockers) > 0,
+                    has_warnings=len(warnings) > 0,
+                    total_findings=len(blockers) + len(warnings) + len(nits),
+                    blockers=blockers,
+                    warnings=warnings,
+                    nits=nits,
+                    feedback_markdown=feedback_md,
+                    feedback_json=feedback_json,
+                    merged=False,
+                    message=f"Circuit-breaker triggered: exceeded {resolved_max_retries} review retries. Aborted by user.",
+                )
 
         # Increment review retry counter and prepare state for dev loop remediation
         new_count = state.increment_review_retry()
@@ -532,7 +634,7 @@ async def run_consensus_phase(
         else:
             try:
                 user_choice = input(prompt_text).strip().lower()
-            except (EOFError, KeyboardInterrupt):
+            except (EOFError, KeyboardInterrupt, OSError):
                 user_choice = "n"
 
         should_merge = user_choice in ("y", "yes")

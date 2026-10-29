@@ -20,6 +20,7 @@ from rich.console import Console
 from core.discovery import DiscoveryCancelledError
 from core.models import WorkflowPhase
 from core.orchestrator import run_orchestrator
+from core.state_machine import determine_resume_phase, load_state
 
 console = Console()
 
@@ -70,8 +71,17 @@ Examples:
         "--state",
         dest="state_path",
         type=str,
-        default="state.json",
-        help="Path to JSON workflow state persistence file (default: 'state.json').",
+        default=".orchestrator/state.json",
+        help="Path to JSON workflow state persistence file (default: '.orchestrator/state.json').",
+    )
+    parser.add_argument(
+        "--resume",
+        dest="resume",
+        nargs="?",
+        const="LAST",
+        default=None,
+        metavar="TASK_ID",
+        help="Resume workflow from state persistence file. Optionally specify task_id.",
     )
     parser.add_argument(
         "-r",
@@ -133,10 +143,39 @@ async def async_main(args: argparse.Namespace) -> int:
         datefmt="%H:%M:%S",
     )
 
-    # Resolve requirements input
+    # Resolve requirements input or resume state
     requirements_text: str | None = None
+    target_state_path = Path(args.state_path).resolve()
+    resume_mode = bool(args.resume)
+    task_id_for_run = None
 
-    if args.file_path:
+    if resume_mode:
+        # Check primary state path or fallback to .orchestrator/state.json or state.json
+        candidate_paths = [target_state_path, Path(".orchestrator/state.json").resolve(), Path("state.json").resolve()]
+        existing_file = None
+        for p in candidate_paths:
+            if p.is_file():
+                existing_file = p
+                break
+
+        if not existing_file:
+            console.print(f"[bold red]Fehler:[/bold red] Kein Workflow-State zum Fortsetzen gefunden: {target_state_path}")
+            return 1
+
+        try:
+            expected_tid = args.resume if args.resume != "LAST" else None
+            restored_state = load_state(existing_file, task_id=expected_tid)
+            requirements_text = restored_state.raw_requirements
+            task_id_for_run = restored_state.task_id
+            target_state_path = existing_file
+            resume_phase = determine_resume_phase(restored_state)
+            console.print(
+                f"[bold cyan]Setze Workflow für Task '{restored_state.task_id}' in Phase '{resume_phase.value}' fort...[/bold cyan]"
+            )
+        except Exception as exc:
+            console.print(f"[bold red]Fehler beim Laden des State für Resume:[/bold red] {exc}")
+            return 1
+    elif args.file_path:
         req_file = Path(args.file_path).resolve()
         if not req_file.is_file():
             console.print(f"[bold red]Fehler:[/bold red] Anforderungsdatei nicht gefunden: {req_file}")
@@ -149,36 +188,45 @@ async def async_main(args: argparse.Namespace) -> int:
     elif args.requirements:
         requirements_text = args.requirements.strip()
 
-    if not requirements_text:
+    if not requirements_text and not resume_mode:
         console.print(
             "[bold red]Fehler:[/bold red] Keine Anforderung übergeben.\n"
-            "Bitte Übergib die Anforderung direkt oder verwende --file <pfad>.\n\n"
+            "Bitte Übergib die Anforderung direkt oder verwende --file <pfad> oder --resume [task_id].\n\n"
             "Verwendung:\n"
             '  python main.py "Hier ist die Anforderung..."\n'
             "  python main.py --file requirements.txt\n"
+            "  python main.py --resume\n"
         )
         return 1
 
     try:
         state = await run_orchestrator(
-            requirements=requirements_text,
+            requirements=requirements_text or "",
             config_path=args.config_path,
             repo_path=args.repo_path,
-            state_path=args.state_path,
+            state_path=target_state_path,
             auto_merge=args.auto_merge,
             provider_type=args.provider_type,
             console=console,
+            task_id=task_id_for_run,
+            resume_from_state=resume_mode,
         )
 
         if state.current_phase == WorkflowPhase.DONE.value:
             console.print(
-                f"\n[bold green]✓ Orchestrierung erfolgreich abgeschlossen! State gespeichert in: {args.state_path}[/bold green]"
+                f"\n[bold green]✓ Orchestrierung erfolgreich abgeschlossen! State gespeichert in: {target_state_path}[/bold green]"
+            )
+            return 0
+        elif state.current_phase == WorkflowPhase.HUMAN_INTERVENTION_REQUIRED.value:
+            console.print(
+                f"\n[bold yellow]! Orchestrierung pausiert in Phase '{state.current_phase}'. "
+                f"State gespeichert in: {target_state_path}[/bold yellow]"
             )
             return 0
         else:
             console.print(
                 f"\n[bold red]✗ Orchestrierung endete in Phase '{state.current_phase}'. "
-                f"State gespeichert in: {args.state_path}[/bold red]"
+                f"State gespeichert in: {target_state_path}[/bold red]"
             )
             return 1
 
