@@ -5,8 +5,13 @@ from core.config import (
     AppConfig,
     CLIProviderConfig,
     ProvidersConfig,
+    SkillsConfig,
     WorkflowConfig,
     load_config,
+)
+from core.skills import (
+    SkillManager,
+    normalize_phase_name,
 )
 from core.discovery import (
     DiscoveryAnalysis,
@@ -89,7 +94,10 @@ __all__ = [
     "CLIProviderConfig",
     "ProvidersConfig",
     "WorkflowConfig",
+    "SkillsConfig",
     "load_config",
+    "SkillManager",
+    "normalize_phase_name",
     "Finding",
     "FindingSeverity",
     "Severity",

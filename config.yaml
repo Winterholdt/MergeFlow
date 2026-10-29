@@ -34,3 +34,13 @@ workflow:
   default_branch: "main"
   working_directory: "."
   auto_merge: false
+
+skills:
+  enabled: true
+  directory: "./skills"
+  phases:
+    discovery: ["discovery/requirements_engineering.md"]
+    dev: ["dev/clean_code_solid.md", "dev/test_driven_development.md", "dev/conventional_commits.md"]
+    review_security: ["review/security_owasp.md"]
+    review_architecture: ["review/architecture_quality.md"]
+    review_qa: ["review/qa_coverage.md"]

@@ -115,6 +115,33 @@ class WorkflowConfig(BaseModel):
     )
 
 
+class SkillsConfig(BaseModel):
+    """Configuration for modular agent skills."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Whether modular agent skills injection is enabled.",
+    )
+    directory: str = Field(
+        default="./skills",
+        description="Root directory containing modular skill definitions.",
+    )
+    phases: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "discovery": ["discovery/requirements_engineering.md"],
+            "dev": [
+                "dev/clean_code_solid.md",
+                "dev/test_driven_development.md",
+                "dev/conventional_commits.md",
+            ],
+            "review_security": ["review/security_owasp.md"],
+            "review_architecture": ["review/architecture_quality.md"],
+            "review_qa": ["review/qa_coverage.md"],
+        },
+        description="Mapping of workflow phases to list of skill file paths.",
+    )
+
+
 class AppConfig(BaseSettings):
     """Root application configuration schema with YAML and environment variable support."""
 
@@ -141,6 +168,10 @@ class AppConfig(BaseSettings):
     workflow: WorkflowConfig = Field(
         default_factory=WorkflowConfig,
         description="Workflow execution parameters.",
+    )
+    skills: SkillsConfig = Field(
+        default_factory=SkillsConfig,
+        description="Modular agentic skills configuration.",
     )
 
     @classmethod
