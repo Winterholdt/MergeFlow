@@ -41,7 +41,7 @@ HARD_BLOCK_RULES: list[BlockRule] = [
     BlockRule(
         id="DISK_FORMAT_AND_PARTITIONING",
         pattern=re.compile(
-            r"\b(?:mkfs(?:\.\w+)?|fdisk|format\s+[A-Za-z]:|parted|sfdisk|gdisk|cfdisk)\b",
+            r"\b(?:mkfs(?:\.\w+)?|fdisk|parted|sfdisk|gdisk|cfdisk)\b|\bformat\s+[A-Za-z]:",
             re.IGNORECASE,
         ),
         description="Low-level disk format or partitioning tool execution.",
@@ -75,7 +75,7 @@ HARD_BLOCK_RULES: list[BlockRule] = [
     BlockRule(
         id="CRITICAL_PERMISSIONS_CHMOD_ROOT",
         pattern=re.compile(
-            r"\bchmod\s+(?:-R\s+)?(?:777|000)\s+(?:/|/\*|~|\$HOME)\b",
+            r"\bchmod\s+(?:-R\s+)?(?:777|000)\s+(?:/|/\*|~|\$HOME)(?:\s+|$|[;&|])",
             re.IGNORECASE,
         ),
         description="Unrestricted permissions assignment (e.g. chmod 777 /).",

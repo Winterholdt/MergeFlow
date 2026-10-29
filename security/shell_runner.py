@@ -158,6 +158,9 @@ class ShellRunner:
                     timeout=float(timeout_seconds),
                 )
                 exit_code = proc.returncode if proc.returncode is not None else 0
+                await asyncio.sleep(0.01)
+                if hasattr(proc, "_transport") and proc._transport is not None:
+                    proc._transport.close()
             except asyncio.TimeoutError:
                 logger.error("Command '%s' timed out after %ds. Terminating process...", command, timeout_seconds)
                 try:
@@ -169,9 +172,10 @@ class ShellRunner:
                 except (ProcessLookupError, OSError):
                     pass
 
-                # Cancel pending stream tasks
+                # Cancel and cleanly await pending stream tasks
                 stdout_task.cancel()
                 stderr_task.cancel()
+                await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
 
                 duration = time.perf_counter() - start_time
                 stderr_lines.append(f"\n[ERROR] Command timed out after {timeout_seconds} seconds.")
