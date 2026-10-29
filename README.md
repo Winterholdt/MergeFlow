@@ -7,27 +7,35 @@ MergeFlow is a modular, autonomous multi-agent orchestration framework designed 
 ```
 MergeFlow/
 ├── config.yaml                # Example configuration (models, timeouts, retries, CLI binaries)
+├── main.py                    # CLI entry-point (Phases 1-7)
 ├── pyproject.toml             # Project metadata, dependencies, and test settings
 ├── requirements.txt           # Pip dependencies
 ├── prompts/
-│   └── spec_discovery.md      # System prompt for Requirements Discovery & Architect Agent
+│   ├── spec_discovery.md      # System prompt for Requirements Discovery & Architect Agent
+│   ├── developer.md           # Developer Agent system prompt
+│   ├── ci_healing.md          # CI Healing Agent system prompt
+│   └── review_*.md            # Reviewer persona system prompts (functional, architecture, security, qa_tests)
 ├── core/
 │   ├── __init__.py            # Core package exports
 │   ├── config.py              # YAML and Pydantic Settings configuration loader
-│   ├── discovery.py           # Interactive discovery loop, blind spot analysis & spec generation
+│   ├── consensus.py           # Phase 7: Consensus evaluation, feedback loop & auto-merge
+│   ├── dev_loop.py            # Phase 4: Developer Agent execution loop
+│   ├── discovery.py           # Phase 3: Interactive discovery loop, blind spot analysis & spec generation
+│   ├── healing_loop.py        # Phase 5: Self-healing CI loop
 │   ├── models.py              # Domain & workflow state models (Pydantic v2)
-│   └── provider.py            # LLM provider abstraction (CLI & API with JSON schema support)
+│   ├── orchestrator.py        # Central state-machine connecting Phases 1 through 7
+│   ├── provider.py            # LLM provider abstraction (CLI & API with JSON schema support)
+│   └── reviewer.py            # Phase 6: Multi-persona code review orchestrator
 ├── security/
 │   ├── __init__.py            # Security package exports
 │   ├── allow_block_list.py    # Hard blocklist rules & fast-path allowlist patterns
 │   ├── gatekeeper.py          # Command validation, sandbox containment & LLM auditor fallback
 │   └── shell_runner.py        # Async subprocess shell runner with streaming and timeouts
-└── tests/
-    ├── test_config.py         # Config loading and validation test suite
-    ├── test_discovery.py      # Interactive discovery phase & approval loop test suite
-    ├── test_gatekeeper.py     # Gatekeeper policies, sandbox escapes, LLM audit & runner tests
-    ├── test_models.py         # Workflow state, findings, and spec test suite
-    └── test_provider.py       # CLI and API provider test suite (mocked)
+├── vcs/
+│   ├── ci_watcher.py          # Remote CI pipeline watcher and log extractor
+│   ├── git_handler.py         # Git branching, staging, committing & diffing
+│   └── remote_vcs.py          # GitHub CLI (gh) / GitLab CLI (glab) interface
+└── tests/                     # Unit and integration test suites
 ```
 
 ---
@@ -118,6 +126,41 @@ Phase 3 implements the interactive CLI interface and Spec Agent for transforming
      - **[A]pprove**: Writes `SPEC.md` to `repo_path / "SPEC.md"` and returns its content.
      - **[E]dit**: Collects user feedback, re-queries the agent to update `SPEC.md`, and loops back for review.
      - **[C]ancel**: Aborts cleanly by raising `DiscoveryCancelledError`.
+
+---
+
+## Phase 7: Feedback-Loop, Consensus & Auto-Merge
+
+Phase 7 brings together the code review outcomes from Phase 6 and drives final consensus, automated remediation loops, and repository merging (`core/consensus.py`, `core/orchestrator.py`).
+
+1. **Consensus Evaluation (`core/consensus.py`)**:
+   - **Fall A (Needs Revision)**: If any review is not `APPROVED` or open `BLOCKER` / `WARNING` findings exist:
+     - Formats all findings into structured Markdown documentation with embedded JSON schema.
+     - Feeds feedback back into the Dev Agent loop (Phase 4 -> Phase 5 -> Phase 6).
+     - Enforces a circuit-breaker limit of maximum 3 re-review attempts.
+   - **Fall B (Consensus Approved)**: When all 4 personas have approved and zero blockers or warnings remain:
+     - If `auto_merge: true`: executes `gh pr merge --auto --squash` or `glab mr merge --auto --squash`.
+     - If `auto_merge: false`: renders an approval table in the terminal and asks:
+       `Alle Checks & Reviews bestanden. Merge jetzt ausführen? [y/N]`.
+     - Transitions state to `DONE`.
+
+2. **Central State Machine Orchestrator (`core/orchestrator.py`)**:
+   - Manages the entire lifecycle from Phase 1 through Phase 7.
+   - Persists `WorkflowState` to `state.json` after every step and phase.
+
+3. **CLI Entry-Point (`main.py`)**:
+   - Direct requirement input:
+     ```bash
+     python main.py "Hier ist die Anforderung..."
+     ```
+   - Input via requirements file:
+     ```bash
+     python main.py --file requirements.txt
+     ```
+   - Flags for configuration overrides:
+     ```bash
+     python main.py --file requirements.txt --auto-merge --config config.yaml
+     ```
 
 ---
 
