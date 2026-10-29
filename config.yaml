@@ -1,0 +1,35 @@
+environment: "development"
+log_level: "INFO"
+
+providers:
+  default_provider: "cli"
+  cli:
+    binary_path: "claude"
+    command_args:
+      - "-p"
+    timeout_seconds: 300.0
+    env: {}
+  api:
+    base_url: "https://api.openai.com/v1"
+    api_key: null
+    model: "gpt-4o"
+    timeout_seconds: 60.0
+    max_retries: 3
+  claude:
+    binary_path: "claude"
+    command_args:
+      - "-p"
+    timeout_seconds: 300.0
+    env: {}
+  antigravity:
+    binary_path: "antigravity"
+    command_args:
+      - "run"
+    timeout_seconds: 300.0
+    env: {}
+
+workflow:
+  ci_max_retries: 3
+  review_max_retries: 3
+  default_branch: "main"
+  working_directory: "."
