@@ -33,3 +33,4 @@ workflow:
   review_max_retries: 3
   default_branch: "main"
   working_directory: "."
+  auto_merge: false

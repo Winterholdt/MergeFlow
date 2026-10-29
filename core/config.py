@@ -109,6 +109,10 @@ class WorkflowConfig(BaseModel):
         default=".",
         description="Root working directory for repository tasks.",
     )
+    auto_merge: bool = Field(
+        default=False,
+        description="Whether to automatically merge PR/MR when all reviews pass.",
+    )
 
 
 class AppConfig(BaseSettings):

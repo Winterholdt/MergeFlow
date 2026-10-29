@@ -5,6 +5,7 @@ results, and diagnostic findings.
 """
 
 from enum import Enum
+from pathlib import Path
 import uuid
 from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -17,6 +18,7 @@ class WorkflowPhase(str, Enum):
     CODING = "CODING"
     CI_LOOP = "CI_LOOP"
     REVIEW = "REVIEW"
+    CONSENSUS = "CONSENSUS"
     DONE = "DONE"
     FAILED = "FAILED"
 
@@ -361,3 +363,32 @@ class WorkflowState(BaseModel):
     def clear_findings(self) -> None:
         """Clear all active findings."""
         self.findings.clear()
+
+    def save_to_file(self, path: Path | str) -> Path:
+        """Serialize and persist workflow state to a JSON file.
+
+        Args:
+            path: Target file path.
+
+        Returns:
+            Resolved Path of the saved file.
+        """
+        target = Path(path).resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        return target
+
+    @classmethod
+    def load_from_file(cls, path: Path | str) -> "WorkflowState":
+        """Load and deserialize workflow state from a JSON file.
+
+        Args:
+            path: Path to the JSON file.
+
+        Returns:
+            Restored WorkflowState instance.
+        """
+        target = Path(path).resolve()
+        if not target.is_file():
+            raise FileNotFoundError(f"Workflow state file not found: {target}")
+        return cls.model_validate_json(target.read_text(encoding="utf-8"))

@@ -337,6 +337,57 @@ class RemoteVCS:
             raw_output=output,
         )
 
+    async def merge_pr(
+        self,
+        pr_number: int | str | None = None,
+        auto: bool = True,
+        squash: bool = True,
+    ) -> tuple[int, str, str]:
+        """Merge a Pull Request (GitHub) or Merge Request (GitLab).
+
+        Args:
+            pr_number: Optional PR/MR number to merge. If None, merges current branch's PR/MR.
+            auto: Whether to enable auto-merge (--auto).
+            squash: Whether to squash commits on merge (--squash).
+
+        Returns:
+            Tuple of (exit_code, stdout, stderr).
+
+        Raises:
+            RemoteVCSError: If the CLI tool fails or returns non-zero exit code.
+        """
+        vcs = self.detect_vcs_type()
+
+        if vcs == VCSType.GITHUB:
+            # gh pr merge [pr_number] [--auto] [--squash]
+            args = ["pr", "merge"]
+            if pr_number is not None:
+                args.append(str(pr_number))
+            if auto:
+                args.append("--auto")
+            if squash:
+                args.append("--squash")
+
+            code, stdout, stderr = await self._execute_cli("gh", *args)
+            if code != 0:
+                raise RemoteVCSError(f"GitHub PR merge failed (code {code}): {stderr.strip() or stdout.strip()}")
+            return (code, stdout, stderr)
+
+        else:
+            # glab mr merge [pr_number] [--auto] [--squash]
+            args = ["mr", "merge"]
+            if pr_number is not None:
+                args.append(str(pr_number))
+            if auto:
+                args.append("--auto")
+            if squash:
+                args.append("--squash")
+
+            code, stdout, stderr = await self._execute_cli("glab", *args)
+            if code != 0:
+                raise RemoteVCSError(f"GitLab MR merge failed (code {code}): {stderr.strip() or stdout.strip()}")
+            return (code, stdout, stderr)
+
 
 # Convenience module-level functions
 async def create_draft_pr(
@@ -359,3 +410,15 @@ async def get_pipeline_status(
     """Get CI pipeline status for a PR or MR."""
     client = RemoteVCS(repo_path=repo_path, vcs_type=vcs_type)
     return await client.get_pipeline_status(pr_number=pr_number)
+
+
+async def merge_pr(
+    pr_number: int | str | None = None,
+    auto: bool = True,
+    squash: bool = True,
+    repo_path: Path | str = ".",
+    vcs_type: str = "auto",
+) -> tuple[int, str, str]:
+    """Merge a Pull or Merge Request."""
+    client = RemoteVCS(repo_path=repo_path, vcs_type=vcs_type)
+    return await client.merge_pr(pr_number=pr_number, auto=auto, squash=squash)

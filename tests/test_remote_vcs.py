@@ -187,3 +187,51 @@ async def test_get_pipeline_status_command_failure():
     assert status.state == PipelineState.UNKNOWN
     assert status.all_passed is False
     assert status.raw_output == "No checks reported"
+
+
+# ===========================================================================
+# 4. PR / MR MERGE TESTS
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_merge_pr_github_auto_squash():
+    recorded_commands = []
+
+    async def mock_runner(binary, *args):
+        recorded_commands.append((binary, list(args)))
+        return 0, "https://github.com/org/repo/pull/42 merged\n", ""
+
+    vcs = RemoteVCS(vcs_type=VCSType.GITHUB, runner=mock_runner)
+    code, stdout, stderr = await vcs.merge_pr(pr_number=42, auto=True, squash=True)
+
+    assert code == 0
+    assert "merged" in stdout
+    assert recorded_commands == [("gh", ["pr", "merge", "42", "--auto", "--squash"])]
+
+
+@pytest.mark.asyncio
+async def test_merge_pr_gitlab_manual_squash():
+    recorded_commands = []
+
+    async def mock_runner(binary, *args):
+        recorded_commands.append((binary, list(args)))
+        return 0, "Merge request !99 merged\n", ""
+
+    vcs = RemoteVCS(vcs_type=VCSType.GITLAB, runner=mock_runner)
+    code, stdout, stderr = await vcs.merge_pr(pr_number=99, auto=False, squash=True)
+
+    assert code == 0
+    assert "merged" in stdout
+    assert recorded_commands == [("glab", ["mr", "merge", "99", "--squash"])]
+
+
+@pytest.mark.asyncio
+async def test_merge_pr_failure_raises_error():
+    async def mock_runner(binary, *args):
+        return 1, "", "Cannot merge: branch is out of date"
+
+    vcs = RemoteVCS(vcs_type=VCSType.GITHUB, runner=mock_runner)
+    with pytest.raises(RemoteVCSError) as exc_info:
+        await vcs.merge_pr(pr_number=10)
+    assert "GitHub PR merge failed" in str(exc_info.value)
+

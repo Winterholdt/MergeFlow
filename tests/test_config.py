@@ -25,6 +25,7 @@ def test_default_config_instantiation():
     assert config.providers.api.model == "gpt-4o"
     assert config.workflow.ci_max_retries == 3
     assert config.workflow.review_max_retries == 3
+    assert config.workflow.auto_merge is False
 
 
 def test_load_from_valid_yaml(tmp_path: Path):
