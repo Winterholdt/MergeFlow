@@ -103,38 +103,57 @@ workflow:
 
 ## How to Run
 
-### 1. Direct Task Prompt
-Pass task requirements directly as a command-line string:
+After installing via `pip install -e .`, you can use `mergeflow` or `orch` globally from any repository directory like a CLI AI:
+
+### 1. Interactive CLI Mode (Prompt-Eingabe)
+Einfach `orch` oder `mergeflow` in einem beliebigen Projektverzeichnis aufrufen:
 ```bash
-python main.py "Implement user authentication with JWT and refresh tokens"
+orch
+# oder
+mergeflow
+```
+Es öffnet sich direkt ein interaktiver Prompt:
+```text
+╭────────────────── 🤖 MergeFlow Autonomous Orchestrator ──────────────────╮
+│ Gib deine Anforderungen ein (oder 'exit'/'quit' zum Beenden):            │
+╰──────────────────────────────────────────────────────────────────────────╯
+Prompt > Baue eine REST API für User-Authentifizierung
 ```
 
-### 2. Requirements from File
+### 2. Direct Task Prompt
+Anforderungen direkt als Argument übergeben – mit oder ohne Anführungszeichen:
+```bash
+orch "Implement user authentication with JWT and refresh tokens"
+# oder direkt ohne Quotes:
+orch Implement user authentication with JWT and refresh tokens
+```
+
+### 3. Requirements from File
 Load a task description or spec from a text or markdown file:
 ```bash
-python main.py --file requirements.txt
+orch --file requirements.txt
 # or
-python main.py -f docs/task.md
+orch -f docs/task.md
 ```
 
-### 3. Common CLI Flags
+### 4. Common CLI Flags
 
 | Flag | Description | Default |
 | --- | --- | --- |
-| `requirements` | Positional prompt string describing the task | `None` |
+| `requirements` | Positional prompt string describing the task (or multiple words) | Interactive prompt if empty |
 | `-f`, `--file <path>` | Path to requirements file | `None` |
-| `-p`, `--provider <type>` | Override LLM provider (`cli`, `api`, `claude`, `antigravity`) | From config |
-| `-c`, `--config <path>` | Path to custom YAML configuration file | `config.yaml` |
-| `-r`, `--repo <path>` | Target repository root directory | `.` |
+| `-p`, `--provider <type>` | Override LLM provider (`cli`, `api`, `claude`, `antigravity`, `agy`) | From config |
+| `-c`, `--config <path>` | Path to custom YAML configuration file | `config.yaml` / package default |
+| `-r`, `--repo <path>` | Target repository root directory | `.` (current working directory) |
 | `--auto-merge` | Automatically squash-merge PR when all checks and reviews pass | Interactive prompt |
 | `--no-auto-merge` | Require explicit terminal confirmation before merging | Active |
 | `--resume [TASK_ID]` | Resume an interrupted workflow from state persistence file | `None` |
 | `-s`, `--state <path>` | Workflow state file location | `.orchestrator/state.json` |
 
-### 4. Resuming Interrupted Workflows
+### 5. Resuming Interrupted Workflows
 If a run is aborted or fails, progress is saved in `.orchestrator/state.json`. Resume where you left off with:
 ```bash
-python main.py --resume
+orch --resume
 ```
 
 ---

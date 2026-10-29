@@ -84,13 +84,24 @@ class SkillManager:
         """
         if config is not None:
             self.enabled = config.enabled
-            self.skills_dir = Path(config.directory).resolve()
+            target_dir = Path(config.directory)
+            if config.directory in ("./skills", "skills") and not target_dir.is_dir():
+                package_skills = Path(__file__).resolve().parent.parent / "skills"
+                self.skills_dir = package_skills.resolve() if package_skills.is_dir() else target_dir.resolve()
+            else:
+                self.skills_dir = target_dir.resolve()
             self.phases_config = dict(config.phases)
         else:
             self.enabled = enabled
-            self.skills_dir = (
-                Path(skills_dir).resolve() if skills_dir is not None else DEFAULT_SKILLS_DIR.resolve()
-            )
+            if skills_dir is not None:
+                self.skills_dir = Path(skills_dir).resolve()
+            else:
+                local_skills = DEFAULT_SKILLS_DIR.resolve()
+                if local_skills.is_dir():
+                    self.skills_dir = local_skills
+                else:
+                    package_skills = Path(__file__).resolve().parent.parent / "skills"
+                    self.skills_dir = package_skills.resolve()
             self.phases_config = dict(phases_config) if phases_config is not None else None
 
     def load_skill(self, skill_path: str) -> str:

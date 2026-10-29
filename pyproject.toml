@@ -16,6 +16,18 @@ dependencies = [
     "rich>=13.0.0",
 ]
 
+[project.scripts]
+mergeflow = "main:main"
+orch = "main:main"
+ai-orch = "main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core*", "vcs*", "security*"]
+
+[tool.setuptools]
+py-modules = ["main"]
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",

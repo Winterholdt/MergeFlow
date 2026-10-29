@@ -210,10 +210,24 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         Validated AppConfig instance.
     """
     if path is not None:
-        return AppConfig.from_yaml(path)
+        p = Path(path)
+        if p.is_file():
+            return AppConfig.from_yaml(p)
+        # If the requested path was the default 'config.yaml' and not found in CWD,
+        # fallback to the package-level default config.yaml
+        if str(path) == "config.yaml":
+            package_config = Path(__file__).resolve().parent.parent / "config.yaml"
+            if package_config.is_file():
+                return AppConfig.from_yaml(package_config)
+            return AppConfig()
+        raise FileNotFoundError(f"Configuration file not found: {p}")
 
     default_file = Path("config.yaml")
     if default_file.is_file():
         return AppConfig.from_yaml(default_file)
+
+    package_config = Path(__file__).resolve().parent.parent / "config.yaml"
+    if package_config.is_file():
+        return AppConfig.from_yaml(package_config)
 
     return AppConfig()

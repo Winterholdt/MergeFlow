@@ -16,6 +16,7 @@ from pathlib import Path
 import sys
 
 from rich.console import Console
+from rich.panel import Panel
 
 from core.discovery import DiscoveryCancelledError
 from core.models import WorkflowPhase
@@ -37,10 +38,12 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py "Add an export to CSV endpoint in the reports module"
-  python main.py --file requirements.txt
-  python main.py --file requirements.txt --auto-merge
-  python main.py "Fix bug in payment processing" --config custom_config.yaml
+  orch
+  orch "Add an export to CSV endpoint in the reports module"
+  orch Add an export to CSV endpoint in the reports module
+  orch --file requirements.txt
+  orch --file requirements.txt --auto-merge
+  orch --resume
         """,
     )
 
@@ -49,6 +52,12 @@ Examples:
         nargs="?",
         default=None,
         help="Raw requirements description or task prompt.",
+    )
+    parser.add_argument(
+        "extra_words",
+        nargs="*",
+        default=[],
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "-f",
@@ -186,18 +195,38 @@ async def async_main(args: argparse.Namespace) -> int:
             console.print(f"[bold red]Fehler beim Lesen der Datei '{req_file}':[/bold red] {exc}")
             return 1
     elif args.requirements:
-        requirements_text = args.requirements.strip()
+        all_words = [args.requirements] + (getattr(args, "extra_words", None) or [])
+        requirements_text = " ".join(all_words).strip()
 
     if not requirements_text and not resume_mode:
-        console.print(
-            "[bold red]Fehler:[/bold red] Keine Anforderung übergeben.\n"
-            "Bitte Übergib die Anforderung direkt oder verwende --file <pfad> oder --resume [task_id].\n\n"
-            "Verwendung:\n"
-            '  python main.py "Hier ist die Anforderung..."\n'
-            "  python main.py --file requirements.txt\n"
-            "  python main.py --resume\n"
-        )
-        return 1
+        if sys.stdin.isatty():
+            console.print(
+                Panel.fit(
+                    "[bold green]🤖 MergeFlow Autonomous Orchestrator[/bold green]\n"
+                    "[dim]Gib deine Anforderungen ein (oder 'exit'/'quit' zum Beenden):[/dim]",
+                    border_style="green",
+                )
+            )
+            try:
+                user_prompt = console.input("[bold cyan]Prompt > [/bold cyan]").strip()
+                if user_prompt and user_prompt.lower() not in ("exit", "quit", "q"):
+                    requirements_text = user_prompt
+            except (EOFError, KeyboardInterrupt):
+                console.print("\n[yellow]Vorgang durch Benutzer abgebrochen.[/yellow]")
+                return 130
+
+        if not requirements_text:
+            console.print(
+                "[bold red]Fehler:[/bold red] Keine Anforderung übergeben.\n"
+                "Bitte übergib die Anforderung direkt oder verwende --file <pfad> oder --resume [task_id].\n\n"
+                "Verwendung:\n"
+                '  mergeflow "Hier ist die Anforderung..."\n'
+                "  mergeflow Hier ist die Anforderung ohne Anführungszeichen\n"
+                "  mergeflow\n"
+                "  mergeflow --file requirements.txt\n"
+                "  mergeflow --resume\n"
+            )
+            return 1
 
     try:
         state = await run_orchestrator(

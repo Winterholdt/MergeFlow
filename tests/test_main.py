@@ -89,3 +89,49 @@ async def test_async_main_orchestration_failed():
         code = await async_main(args)
 
     assert code == 1
+
+
+@pytest.mark.asyncio
+async def test_async_main_unquoted_multi_word_requirements():
+    """CLI automatically joins multiple words passed without quotes."""
+    parser = build_parser()
+    args = parser.parse_args(["Build", "user", "authentication", "system"])
+
+    mock_state = WorkflowState(
+        task_id="TASK-UNQUOTED",
+        raw_requirements="Build user authentication system",
+        current_phase=WorkflowPhase.DONE.value,
+    )
+
+    with patch("main.run_orchestrator", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = mock_state
+        code = await async_main(args)
+
+    assert code == 0
+    mock_run.assert_called_once()
+    assert mock_run.call_args.kwargs["requirements"] == "Build user authentication system"
+
+
+@pytest.mark.asyncio
+async def test_async_main_interactive_prompt():
+    """When no args given in tty mode, prompt user for input interactively."""
+    parser = build_parser()
+    args = parser.parse_args([])
+
+    mock_state = WorkflowState(
+        task_id="TASK-INTERACTIVE",
+        raw_requirements="Interactive requirement prompt",
+        current_phase=WorkflowPhase.DONE.value,
+    )
+
+    with (
+        patch("sys.stdin.isatty", return_value=True),
+        patch("main.console.input", return_value="Interactive requirement prompt"),
+        patch("main.run_orchestrator", new_callable=AsyncMock) as mock_run,
+    ):
+        mock_run.return_value = mock_state
+        code = await async_main(args)
+
+    assert code == 0
+    mock_run.assert_called_once()
+    assert mock_run.call_args.kwargs["requirements"] == "Interactive requirement prompt"
