@@ -22,6 +22,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 
 from core.provider import BaseLLMProvider
+from core.skills import SkillManager
 
 logger = logging.getLogger(__name__)
 
@@ -121,30 +122,47 @@ def gather_repo_context(repo_path: Path, max_file_chars: int = 3500) -> str:
     return "\n\n".join(sections)
 
 
-def load_discovery_prompt(prompt_path: Path | None = None) -> str:
+def load_discovery_prompt(
+    prompt_path: Path | None = None,
+    skill_manager: SkillManager | None = None,
+    custom_skills: list[str] | None = None,
+) -> str:
     """Load the system prompt for the discovery agent from file or fallback default.
+
+    Injects phase-specific domain skills via {{PHASE_SKILLS}} placeholder.
 
     Args:
         prompt_path: Optional explicit path to the markdown prompt file.
+        skill_manager: Optional SkillManager instance for injecting modular skills.
+        custom_skills: Optional additional project-specific skill files.
 
     Returns:
-        System prompt string.
+        System prompt string with injected skills.
     """
+    raw_prompt: str
     if prompt_path is None:
         prompt_path = Path(__file__).resolve().parent.parent / "prompts" / "spec_discovery.md"
 
     if prompt_path.is_file():
         try:
-            return prompt_path.read_text(encoding="utf-8")
+            raw_prompt = prompt_path.read_text(encoding="utf-8")
         except Exception as exc:
             logger.warning("Could not read prompt from '%s': %s. Using default.", prompt_path, exc)
+            raw_prompt = (
+                "You are the Senior Software Architect and Discovery Agent of MergeFlow. "
+                "Your mission is to evaluate requirements against repository context, identify blind spots, "
+                "ask essential clarifying questions, and generate a battle-tested SPEC.md."
+            )
+    else:
+        # Fallback system prompt if file is missing
+        raw_prompt = (
+            "You are the Senior Software Architect and Discovery Agent of MergeFlow. "
+            "Your mission is to evaluate requirements against repository context, identify blind spots, "
+            "ask essential clarifying questions, and generate a battle-tested SPEC.md."
+        )
 
-    # Fallback system prompt if file is missing
-    return (
-        "You are the Senior Software Architect and Discovery Agent of MergeFlow. "
-        "Your mission is to evaluate requirements against repository context, identify blind spots, "
-        "ask essential clarifying questions, and generate a battle-tested SPEC.md."
-    )
+    manager = skill_manager or SkillManager()
+    return manager.inject_skills(raw_prompt, phase="discovery", custom_skills=custom_skills)
 
 
 def _clean_markdown_fence(text: str) -> str:
@@ -212,6 +230,8 @@ async def run_discovery_phase(
     repo_path: Path,
     console: Console | None = None,
     input_func: Callable[[str], str] | None = None,
+    skill_manager: SkillManager | None = None,
+    custom_skills: list[str] | None = None,
 ) -> str:
     """Execute the interactive discovery & specification loop.
 
@@ -231,6 +251,8 @@ async def run_discovery_phase(
         repo_path: Root path of the repository being modified.
         console: Optional Rich Console instance for output rendering.
         input_func: Optional input function for prompting (defaults to Prompt.ask).
+        skill_manager: Optional SkillManager instance for modular agent skills.
+        custom_skills: Optional list of additional project-specific skill files.
 
     Returns:
         The approved SPEC.md markdown string.
@@ -264,7 +286,10 @@ async def run_discovery_phase(
     # -------------------------------------------------------------------------
     # Schritt 2 & 3: Discovery-Prompt senden & Fragen erhalten
     # -------------------------------------------------------------------------
-    system_prompt = load_discovery_prompt()
+    system_prompt = load_discovery_prompt(
+        skill_manager=skill_manager,
+        custom_skills=custom_skills,
+    )
 
     discovery_user_prompt = (
         "### Task: Analyze Requirements & Formulate Clarifying Questions\n\n"

@@ -15,6 +15,12 @@ Your mission is to bridge the gap between vague, high-level user ideas and battl
 
 ---
 
+## Domain Best Practices & Active Skills
+
+{{PHASE_SKILLS}}
+
+---
+
 ## Workflow Modes
 
 ### Mode 1: Discovery & Blind-Spot Analysis

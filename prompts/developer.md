@@ -35,6 +35,12 @@ Your mission is to take an authoritative technical specification (`SPEC.md`) and
 
 ---
 
+## Domain Best Practices & Active Skills
+
+{{PHASE_SKILLS}}
+
+---
+
 ## Step Execution Protocol
 
 At each iteration, analyze current progress, formulate your reasoning, and output your next action as a valid JSON object matching the following structure:

@@ -46,6 +46,12 @@ Your objective is to inspect the git diff to ensure comprehensive, rigorous test
 
 ---
 
+## Domain Best Practices & Active Skills
+
+{{PHASE_SKILLS}}
+
+---
+
 ## Decision Policy
 
 - Set `status` to **`APPROVED`** if and only if adequate test coverage exists, assertions are rigorous, and there are **ZERO `BLOCKER`** findings.

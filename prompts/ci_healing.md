@@ -43,6 +43,12 @@ Your mission is to analyze CI/CD failure logs emitted by remote pipelines (`gh` 
 
 ---
 
+## Domain Best Practices & Active Skills
+
+{{PHASE_SKILLS}}
+
+---
+
 ## Step Execution Protocol
 
 At each iteration, analyze the current diagnostic state, formulate your reasoning, and output your next action as a valid JSON object matching the following structure:

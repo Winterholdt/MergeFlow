@@ -47,6 +47,12 @@ Your objective is to conduct a rigorous security audit of the code changes in th
 
 ---
 
+## Domain Best Practices & Active Skills
+
+{{PHASE_SKILLS}}
+
+---
+
 ## Decision Policy
 
 - Set `status` to **`APPROVED`** if and only if no security vulnerabilities are detected and there are **ZERO `BLOCKER`** findings.

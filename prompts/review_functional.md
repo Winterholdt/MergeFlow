@@ -41,6 +41,12 @@ Your objective is to conduct an authoritative functional code review on the prov
 
 ---
 
+## Domain Best Practices & Active Skills
+
+{{PHASE_SKILLS}}
+
+---
+
 ## Decision Policy
 
 - Set `status` to **`APPROVED`** if and only if there are **ZERO `BLOCKER`** findings and the code fulfills functional requirements.

@@ -22,6 +22,7 @@ from pydantic import ValidationError
 
 from core.models import Finding, ReviewResult, ReviewSummary, Severity
 from core.provider import BaseLLMProvider, JSONParseError
+from core.skills import SkillManager
 
 logger = logging.getLogger(__name__)
 
@@ -53,15 +54,21 @@ class ReviewParsingError(ReviewError):
 def load_reviewer_prompt(
     reviewer: str,
     prompt_dir: Path | str | None = None,
+    skill_manager: SkillManager | None = None,
+    custom_skills: list[str] | None = None,
 ) -> str:
     """Load the system prompt markdown file for a given reviewer persona.
+
+    Injects phase-specific domain skills via {{PHASE_SKILLS}} placeholder.
 
     Args:
         reviewer: Persona identifier (e.g. 'functional', 'architecture', 'security', 'qa_testing').
         prompt_dir: Directory containing reviewer prompt markdown files.
+        skill_manager: Optional SkillManager instance for injecting modular skills.
+        custom_skills: Optional additional project-specific skill files.
 
     Returns:
-        The content of the persona review prompt.
+        The content of the persona review prompt with injected skills.
 
     Raises:
         FileNotFoundError: If the specified prompt file cannot be located.
@@ -80,20 +87,31 @@ def load_reviewer_prompt(
             raise FileNotFoundError(
                 f"Reviewer prompt file for persona '{reviewer}' not found at: {prompt_path}"
             )
-        return prompt_path.read_text(encoding="utf-8")
+        raw_prompt = prompt_path.read_text(encoding="utf-8")
+    else:
+        prompt_path = Path(DEFAULT_PROMPT_DIR).resolve() / filename
+        if not prompt_path.is_file():
+            # Fallback to local prompts directory relative to current working directory
+            fallback_path = Path("prompts") / filename
+            if fallback_path.is_file():
+                prompt_path = fallback_path.resolve()
+            else:
+                raise FileNotFoundError(
+                    f"Reviewer prompt file for persona '{reviewer}' not found at: {prompt_path}"
+                )
+        raw_prompt = prompt_path.read_text(encoding="utf-8")
 
-    prompt_path = Path(DEFAULT_PROMPT_DIR).resolve() / filename
-    if not prompt_path.is_file():
-        # Fallback to local prompts directory relative to current working directory
-        fallback_path = Path("prompts") / filename
-        if fallback_path.is_file():
-            prompt_path = fallback_path.resolve()
-        else:
-            raise FileNotFoundError(
-                f"Reviewer prompt file for persona '{reviewer}' not found at: {prompt_path}"
-            )
+    persona_norm = reviewer.lower().strip()
+    phase_mapping = {
+        "security": "review_security",
+        "architecture": "review_architecture",
+        "qa_testing": "review_qa",
+        "functional": "review_functional",
+    }
+    target_phase = phase_mapping.get(persona_norm, f"review_{persona_norm}")
 
-    return prompt_path.read_text(encoding="utf-8")
+    manager = skill_manager or SkillManager()
+    return manager.inject_skills(raw_prompt, phase=target_phase, custom_skills=custom_skills)
 
 
 def _build_review_user_prompt(diff: str, spec: str) -> str:
@@ -109,7 +127,16 @@ def _build_review_user_prompt(diff: str, spec: str) -> str:
     clean_diff = diff.strip() if diff and diff.strip() else "(Empty diff - no changes detected)"
     clean_spec = spec.strip() if spec and spec.strip() else "(No specification provided)"
 
+    truncation_note = ""
+    if "gekürzt" in clean_diff.lower() or "token-limit" in clean_diff.lower():
+        truncation_note = (
+            "> [!NOTE]\n"
+            "> WICHTIGER HINWEIS FÜR REVIEWER: Der Git-Diff hat das Token-Limit überschritten und wurde gekürzt. "
+            "Bitte bewerte die Änderungen anhand der Diff-Übersicht (--stat) und der enthaltenen Kern-Dateien.\n\n"
+        )
+
     return (
+        f"{truncation_note}"
         "# Technical Specification (SPEC.md)\n"
         f"{clean_spec}\n\n"
         "# Git Diff Under Review\n"
@@ -126,6 +153,8 @@ async def _run_single_review(
     provider: BaseLLMProvider,
     prompt_dir: Path | str | None = None,
     max_retries: int = 1,
+    skill_manager: SkillManager | None = None,
+    custom_skills: list[str] | None = None,
 ) -> ReviewResult:
     """Execute a single reviewer agent with retry logic on JSON parsing errors.
 
@@ -136,6 +165,8 @@ async def _run_single_review(
         provider: LLM provider instance.
         prompt_dir: Directory where persona prompts reside.
         max_retries: Maximum number of retries upon JSON schema parsing failure (default: 1).
+        skill_manager: Optional SkillManager instance for modular agent skills.
+        custom_skills: Optional additional project-specific skill files.
 
     Returns:
         Validated ReviewResult object.
@@ -144,7 +175,12 @@ async def _run_single_review(
         ReviewParsingError: If output cannot be parsed after max_retries.
         ReviewError: On execution failure.
     """
-    system_prompt = load_reviewer_prompt(reviewer=reviewer, prompt_dir=prompt_dir)
+    system_prompt = load_reviewer_prompt(
+        reviewer=reviewer,
+        prompt_dir=prompt_dir,
+        skill_manager=skill_manager,
+        custom_skills=custom_skills,
+    )
     base_user_prompt = _build_review_user_prompt(diff=diff, spec=spec)
 
     current_user_prompt = base_user_prompt
@@ -223,6 +259,8 @@ async def run_multi_review(
     provider: BaseLLMProvider,
     reviewers: Sequence[str] | None = None,
     prompt_dir: Path | str | None = None,
+    skill_manager: SkillManager | None = None,
+    custom_skills: list[str] | None = None,
 ) -> list[ReviewResult]:
     """Execute all reviewer personas in parallel using asyncio.gather.
 
@@ -232,6 +270,8 @@ async def run_multi_review(
         provider: LLM provider instance for generating completions.
         reviewers: Optional custom sequence of reviewer personas. Defaults to all 4 standard personas.
         prompt_dir: Optional custom prompt directory path.
+        skill_manager: Optional SkillManager instance for modular agent skills.
+        custom_skills: Optional additional project-specific skill files.
 
     Returns:
         List of ReviewResult objects, one for each reviewer persona.
@@ -255,6 +295,8 @@ async def run_multi_review(
             provider=provider,
             prompt_dir=prompt_dir,
             max_retries=1,
+            skill_manager=skill_manager,
+            custom_skills=custom_skills,
         )
         for persona in target_reviewers
     ]
@@ -401,6 +443,8 @@ async def run_review_phase(
     provider: BaseLLMProvider,
     reviewers: Sequence[str] | None = None,
     prompt_dir: Path | str | None = None,
+    skill_manager: SkillManager | None = None,
+    custom_skills: list[str] | None = None,
 ) -> ReviewSummary:
     """Orchestrate Phase 6 multi-persona review and return consolidated summary.
 
@@ -410,6 +454,8 @@ async def run_review_phase(
         provider: LLM provider instance.
         reviewers: Optional custom sequence of reviewer personas.
         prompt_dir: Optional custom prompt directory path.
+        skill_manager: Optional SkillManager instance for modular agent skills.
+        custom_skills: Optional additional project-specific skill files.
 
     Returns:
         ReviewSummary aggregating all findings and overall approval status.
@@ -420,5 +466,7 @@ async def run_review_phase(
         provider=provider,
         reviewers=reviewers,
         prompt_dir=prompt_dir,
+        skill_manager=skill_manager,
+        custom_skills=custom_skills,
     )
     return consolidate_reviews(reviews)

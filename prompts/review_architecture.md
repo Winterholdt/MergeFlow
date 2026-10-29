@@ -47,6 +47,12 @@ Your objective is to evaluate the structural integrity, modularity, maintainabil
 
 ---
 
+## Domain Best Practices & Active Skills
+
+{{PHASE_SKILLS}}
+
+---
+
 ## Decision Policy
 
 - Set `status` to **`APPROVED`** if and only if the architecture is sound, modular, and there are **ZERO `BLOCKER`** findings.

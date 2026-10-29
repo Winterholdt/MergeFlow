@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from core.discovery import gather_repo_context
 from core.models import WorkflowPhase, WorkflowState
 from core.provider import BaseLLMProvider
+from core.skills import SkillManager
 from security.gatekeeper import Gatekeeper, GatekeeperDecision
 from security.shell_runner import CommandResult, ShellRunner
 from vcs.git_handler import GitHandler, sanitize_slug
@@ -77,23 +78,35 @@ class DevAgentStep(BaseModel):
     )
 
 
-def load_developer_prompt(prompt_path: Path | str | None = None) -> str:
+def load_developer_prompt(
+    prompt_path: Path | str | None = None,
+    skill_manager: SkillManager | None = None,
+    custom_skills: list[str] | None = None,
+) -> str:
     """Load the developer agent system prompt from file.
+
+    Injects phase-specific domain skills via {{PHASE_SKILLS}} placeholder.
 
     Args:
         prompt_path: Optional custom prompt path (defaults to prompts/developer.md).
+        skill_manager: Optional SkillManager instance for injecting modular skills.
+        custom_skills: Optional additional project-specific skill files.
 
     Returns:
-        System prompt string.
+        System prompt string with injected skills.
     """
     path = Path(prompt_path) if prompt_path else DEFAULT_DEVELOPER_PROMPT_PATH
     if not path.is_file():
         # Fallback inline system prompt if file is missing
-        return (
+        raw_prompt = (
             "You are an autonomous Senior Software Developer Agent. "
             "Implement the specification, test thoroughly, and commit using Conventional Commits."
         )
-    return path.read_text(encoding="utf-8")
+    else:
+        raw_prompt = path.read_text(encoding="utf-8")
+
+    manager = skill_manager or SkillManager()
+    return manager.inject_skills(raw_prompt, phase="dev", custom_skills=custom_skills)
 
 
 def extract_spec_slug(spec: str, fallback_task_id: str = "feature") -> str:
@@ -144,6 +157,8 @@ async def _execute_step(
     gatekeeper: Gatekeeper,
     shell_runner: ShellRunner,
     git_handler: GitHandler,
+    state: WorkflowState | None = None,
+    is_fix_mode: bool = False,
 ) -> tuple[bool, str]:
     """Execute a single step from the developer agent.
 
@@ -155,6 +170,8 @@ async def _execute_step(
         gatekeeper: Active Gatekeeper instance.
         shell_runner: Active ShellRunner instance.
         git_handler: Active GitHandler instance.
+        state: Optional active WorkflowState instance.
+        is_fix_mode: Whether agent is currently addressing review findings.
 
     Returns:
         Tuple of (success: bool, output_message: str).
@@ -169,6 +186,7 @@ async def _execute_step(
             command=cmd,
             cwd=repo_root,
             task_goal=step.thought or "Dev Agent Step Execution",
+            state=state,
         )
 
         if res.was_blocked:
@@ -210,6 +228,14 @@ async def _execute_step(
             return False, f"Failed to write file '{file_path_str}': {exc}"
 
     elif step.action_type == DevActionType.COMMIT:
+        if is_fix_mode:
+            try:
+                is_drift, drift_reason = await git_handler.check_scope_drift()
+                if is_drift:
+                    logger.warning("Scope-Drift-Guard Warnung vor Review-Fix Commit: %s", drift_reason)
+            except Exception as drift_err:
+                logger.debug("Scope drift check error: %s", drift_err)
+
         msg = (step.commit_message or step.thought or "update codebase").strip()
         try:
             commit_hash = await git_handler.commit_changes(msg)
@@ -232,6 +258,8 @@ async def run_dev_phase(
     remote_vcs: RemoteVCS | None = None,
     max_iterations: int = 15,
     feedback: str | None = None,
+    skill_manager: SkillManager | None = None,
+    custom_skills: list[str] | None = None,
 ) -> None:
     """Execute the Phase 4 Dev-Agent Loop.
 
@@ -275,7 +303,10 @@ async def run_dev_phase(
         raise DevLoopError(f"Failed to create feature branch for slug '{slug}': {exc}") from exc
 
     # Step 2: Prepare Agent context and prompts
-    system_prompt = load_developer_prompt()
+    system_prompt = load_developer_prompt(
+        skill_manager=skill_manager,
+        custom_skills=custom_skills,
+    )
     repo_context = gather_repo_context(repo_root)
 
     history: list[str] = []
@@ -286,7 +317,14 @@ async def run_dev_phase(
         logger.info("Dev-Agent loop turn %d/%d", iteration, max_iterations)
 
         # Build turn prompt
-        user_prompt = (
+        user_prompt = ""
+        if feedback:
+            user_prompt += (
+                "### REGEL (FIX-Modus):\n"
+                "Du befindest dich im FIX-Modus. Führe KEINE Refactorings durch und ändere keine funktionierende "
+                "Geschäftslogik außerhalb des gemeldeten Fehlers. Behebe ausschließlich das gemeldete Problem.\n\n"
+            )
+        user_prompt += (
             f"### Feature Specification (SPEC.md):\n{spec}\n\n"
             f"### Repository Context & Guidelines:\n{repo_context}\n\n"
             f"### Active Branch:\n{state.branch_name}\n\n"
@@ -333,6 +371,8 @@ async def run_dev_phase(
             gatekeeper=gatekeeper,
             shell_runner=shell_runner,
             git_handler=git,
+            state=state,
+            is_fix_mode=bool(feedback),
         )
 
         history.append(
@@ -343,11 +383,18 @@ async def run_dev_phase(
     try:
         has_uncommitted = await git.has_uncommitted_changes()
         if has_uncommitted:
-            logger.info("Staging and committing remaining uncommitted changes.")
             if feedback:
+                try:
+                    is_drift, drift_reason = await git.check_scope_drift()
+                    if is_drift:
+                        logger.warning("Scope-Drift-Guard Warnung vor Review-Fix Commit: %s", drift_reason)
+                except Exception as drift_err:
+                    logger.debug("Scope drift check error: %s", drift_err)
                 commit_msg = f"fix(review): address review findings for {spec_title.lower()}"
             else:
                 commit_msg = f"feat: implement {spec_title.lower()}"
+
+            logger.info("Staging and committing remaining uncommitted changes.")
             await git.commit_changes(commit_msg)
 
         # Step 5: Push branch to remote

@@ -15,15 +15,20 @@ Coordinates autonomous pipeline monitoring and self-healing remediation:
 """
 
 import asyncio
+from collections.abc import Callable
 import logging
 from pathlib import Path
 import re
 from typing import Any
 
+from rich.console import Console
+from rich.panel import Panel
+
 from core.dev_loop import DevActionType, DevAgentStep
 from core.discovery import gather_repo_context
 from core.models import Finding, FindingSeverity, Severity, WorkflowPhase, WorkflowState
 from core.provider import BaseLLMProvider
+from core.skills import SkillManager
 from security.gatekeeper import Gatekeeper
 from security.shell_runner import ShellRunner
 from vcs.ci_watcher import CIWatcher, PipelineResult
@@ -39,22 +44,34 @@ class CIHealingError(Exception):
     """Exception raised for fatal CI healing execution errors."""
 
 
-def load_ci_healing_prompt(prompt_path: Path | str | None = None) -> str:
+def load_ci_healing_prompt(
+    prompt_path: Path | str | None = None,
+    skill_manager: SkillManager | None = None,
+    custom_skills: list[str] | None = None,
+) -> str:
     """Load the CI healing agent system prompt from disk.
+
+    Injects phase-specific domain skills via {{PHASE_SKILLS}} placeholder.
 
     Args:
         prompt_path: Optional custom prompt path (defaults to prompts/ci_healing.md).
+        skill_manager: Optional SkillManager instance for injecting modular skills.
+        custom_skills: Optional additional project-specific skill files.
 
     Returns:
-        System prompt string.
+        System prompt string with injected skills.
     """
     path = Path(prompt_path) if prompt_path else DEFAULT_CI_HEALING_PROMPT_PATH
     if not path.is_file():
-        return (
+        raw_prompt = (
             "You are the Autonomous CI Healing Agent of MergeFlow. "
             "Analyze the failure logs, fix the broken files, test locally, and commit with 'fix(ci): <reason>'."
         )
-    return path.read_text(encoding="utf-8")
+    else:
+        raw_prompt = path.read_text(encoding="utf-8")
+
+    manager = skill_manager or SkillManager()
+    return manager.inject_skills(raw_prompt, phase="dev", custom_skills=custom_skills)
 
 
 def format_ci_commit_message(
@@ -102,6 +119,7 @@ async def _execute_healing_step(
     gatekeeper: Gatekeeper,
     shell_runner: ShellRunner,
     git_handler: GitHandler,
+    state: WorkflowState | None = None,
 ) -> tuple[bool, str]:
     """Execute a single step from the CI healing agent.
 
@@ -113,6 +131,7 @@ async def _execute_healing_step(
         gatekeeper: Active Gatekeeper instance.
         shell_runner: Active ShellRunner instance.
         git_handler: Active GitHandler instance.
+        state: Optional active WorkflowState instance.
 
     Returns:
         Tuple of (success: bool, outcome_message: str).
@@ -126,6 +145,7 @@ async def _execute_healing_step(
             command=cmd,
             cwd=repo_root,
             task_goal=step.thought or "CI Healing Step Execution",
+            state=state,
         )
 
         if res.was_blocked:
@@ -167,6 +187,14 @@ async def _execute_healing_step(
             return False, f"Failed to write file '{file_path_str}': {exc}"
 
     elif step.action_type == DevActionType.COMMIT:
+        # Scope-Drift Guard
+        try:
+            is_drift, drift_reason = await git_handler.check_scope_drift()
+            if is_drift:
+                logger.warning("Scope-Drift-Guard Warnung vor CI-Healing Commit: %s", drift_reason)
+        except Exception as drift_err:
+            logger.debug("Scope drift check error: %s", drift_err)
+
         raw_msg = (step.commit_message or step.thought or "fix ci error").strip()
         formatted_msg = format_ci_commit_message(raw_msg)
         try:
@@ -192,6 +220,10 @@ async def run_ci_healing_loop(
     poll_interval: int = 15,
     timeout: int = 600,
     agent_max_iterations: int = 10,
+    skill_manager: SkillManager | None = None,
+    custom_skills: list[str] | None = None,
+    console: Console | None = None,
+    input_func: Callable[[str], str] | None = None,
 ) -> bool:
     """Execute Phase 5: CI-Watcher & Self-Healing Loop with Circuit-Breaker.
 
@@ -204,8 +236,9 @@ async def run_ci_healing_loop(
          and commits with 'fix(ci): <reason>'.
        - Pushes fixes to the remote branch and polls again.
     4. If retry_count reaches max_retries (Circuit-Breaker):
-       - Aborts with status FAILED.
-       - Creates diagnostic finding and alerts the user.
+       - Aborts automatic loop immediately.
+       - Transitions state to HUMAN_INTERVENTION_REQUIRED.
+       - Prints consolidated conflict report and offers interactive options [M]/[F]/[A].
 
     Args:
         state: Active WorkflowState tracking current task and counters.
@@ -218,6 +251,10 @@ async def run_ci_healing_loop(
         poll_interval: Polling frequency in seconds.
         timeout: Maximum time in seconds to wait per pipeline run.
         agent_max_iterations: Maximum iteration turns per healing agent remediation cycle.
+        skill_manager: Optional SkillManager.
+        custom_skills: Optional custom skills list.
+        console: Optional Rich Console for UI output.
+        input_func: Optional input function for terminal prompt testing.
 
     Returns:
         True if the pipeline eventually succeeds; False if circuit-breaker trips or fails.
@@ -228,6 +265,7 @@ async def run_ci_healing_loop(
     active_vcs = remote_vcs or RemoteVCS(repo_path=repo_root)
     active_watcher = ci_watcher or CIWatcher(remote_vcs=active_vcs, repo_path=repo_root)
     shell_runner = ShellRunner(gatekeeper=active_gatekeeper, repo_root=repo_root)
+    ui_console = console or Console()
 
     # Ensure active working branch is recorded
     if not state.branch_name:
@@ -275,7 +313,10 @@ async def run_ci_healing_loop(
                 "CIRCUIT-BREAKER TRIGGERED: Exceeded maximum CI retries (%d). Aborting healing loop.",
                 max_retries,
             )
-            state.transition_to(WorkflowPhase.FAILED)
+            state.transition_to(WorkflowPhase.HUMAN_INTERVENTION_REQUIRED)
+            state.metadata["circuit_breaker_triggered"] = True
+            state.metadata["failed_phase"] = WorkflowPhase.CI_LOOP.value
+            state.metadata["ci_error"] = pipeline_result.error_logs
 
             # Record diagnostic finding and notify user
             failure_finding = Finding(
@@ -289,9 +330,74 @@ async def run_ci_healing_loop(
                 suggestion="Investigate the pipeline logs on remote VCS and resolve issues manually.",
             )
             state.add_finding(failure_finding)
-            state.metadata["circuit_breaker_triggered"] = True
-            state.metadata["ci_error"] = pipeline_result.error_logs
-            return False
+
+            failed_checks = [
+                c.name for c in pipeline_result.checks if c.conclusion in ("failure", "timed_out", "cancelled")
+            ]
+            checks_info = f"\nFehlgeschlagene Jobs: {', '.join(failed_checks)}" if failed_checks else ""
+            error_preview = (pipeline_result.error_logs or pipeline_result.raw_logs or "Keine Details").strip()
+
+            conflict_report = (
+                f"[bold red]CIRCUIT-BREAKER AUSGELÖST: CI-Ping-Pong-Bremse aktiviert![/bold red]\n\n"
+                f"Die CI-Pipeline auf Branch '{state.branch_name}' konnte nach {max_retries} Heilungs-Runden nicht behoben werden.{checks_info}\n\n"
+                f"[bold]Extrahierte Fehlermeldungen:[/bold]\n{error_preview[:1500]}\n"
+            )
+            ui_console.print(
+                Panel(
+                    conflict_report,
+                    title="[bold red]Konsolidierter CI-Konflikt-Report[/bold red]",
+                    border_style="red",
+                )
+            )
+
+            prompt_text = "[M]anuell übernehmen / [F]orce Merge versuchen / [A]bbruch: "
+            if input_func is not None:
+                user_choice = input_func(prompt_text).strip().lower()
+            else:
+                try:
+                    user_choice = input(prompt_text).strip().lower()
+                except (EOFError, KeyboardInterrupt, OSError):
+                    user_choice = "a"
+
+            if user_choice in ("m", "manuell", "manual"):
+                ui_console.print(
+                    "[yellow]Manuelle Übernahme gewählt. Workflow pausiert in Phase 'HUMAN_INTERVENTION_REQUIRED'. "
+                    "Nach manueller Fehlerbehebung kann mit '--resume' fortgesetzt werden.[/yellow]"
+                )
+                return False
+
+            elif user_choice in ("f", "force", "force merge"):
+                ui_console.print("[cyan]Versuche Force Merge trotz CI-Fehlern...[/cyan]")
+                try:
+                    pr_num = pr_number or extract_pr_number_from_url(state.metadata.get("pr_url"))
+                    exit_code, stdout, stderr = await active_vcs.merge_pr(
+                        pr_number=pr_num,
+                        auto=False,
+                        squash=True,
+                    )
+                    state.metadata["merged"] = True
+                    state.metadata["merge_mode"] = "force"
+                    state.metadata["merge_output"] = stdout.strip() or stderr.strip()
+                    state.transition_to(WorkflowPhase.DONE)
+                    ui_console.print(
+                        Panel(
+                            "[bold green]✓ Force Merge erfolgreich durchgeführt![/bold green]",
+                            title="[bold green]Force Merge Erfolgreich[/bold green]",
+                            border_style="green",
+                        )
+                    )
+                    return True
+                except Exception as exc:
+                    logger.error("Force merge failed: %s", exc)
+                    state.transition_to(WorkflowPhase.FAILED)
+                    state.metadata["merge_error"] = str(exc)
+                    ui_console.print(f"[bold red]Force Merge fehlgeschlagen: {exc}[/bold red]")
+                    return False
+
+            else:
+                ui_console.print("[bold red]Vorgang durch Benutzer abgebrochen.[/bold red]")
+                state.transition_to(WorkflowPhase.FAILED)
+                return False
 
         if provider is None:
             raise CIHealingError(
@@ -309,7 +415,10 @@ async def run_ci_healing_loop(
         # Gather context: recent commits, repo context, failure logs
         recent_commits = await active_git.get_recent_commits(count=5)
         repo_context = gather_repo_context(repo_root)
-        system_prompt = load_ci_healing_prompt()
+        system_prompt = load_ci_healing_prompt(
+            skill_manager=skill_manager,
+            custom_skills=custom_skills,
+        )
 
         history: list[str] = []
 
@@ -318,6 +427,9 @@ async def run_ci_healing_loop(
             logger.info("CI Healing Agent turn %d/%d", iteration, agent_max_iterations)
 
             turn_prompt = (
+                f"### REGEL (FIX-Modus):\n"
+                f"Du befindest dich im FIX-Modus. Führe KEINE Refactorings durch und ändere keine funktionierende "
+                f"Geschäftslogik außerhalb des gemeldeten Fehlers. Behebe ausschließlich das gemeldete Problem.\n\n"
                 f"### CI Pipeline Failure Logs:\n{pipeline_result.error_logs or pipeline_result.raw_logs}\n\n"
                 f"### Recent Git Commits:\n{recent_commits}\n\n"
                 f"### Active Branch:\n{state.branch_name}\n\n"
@@ -359,6 +471,7 @@ async def run_ci_healing_loop(
                 gatekeeper=active_gatekeeper,
                 shell_runner=shell_runner,
                 git_handler=active_git,
+                state=state,
             )
 
             history.append(
@@ -369,6 +482,13 @@ async def run_ci_healing_loop(
         try:
             has_uncommitted = await active_git.has_uncommitted_changes()
             if has_uncommitted:
+                try:
+                    is_drift, drift_reason = await active_git.check_scope_drift()
+                    if is_drift:
+                        logger.warning("Scope-Drift-Guard Warnung vor CI-Healing Commit: %s", drift_reason)
+                except Exception as drift_err:
+                    logger.debug("Scope drift check error: %s", drift_err)
+
                 logger.info("Staging and committing remaining fixes from healing agent.")
                 default_msg = format_ci_commit_message(f"remediate CI failure attempt {state.ci_retry_count}")
                 await active_git.commit_changes(default_msg)
