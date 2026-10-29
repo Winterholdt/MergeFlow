@@ -8,6 +8,14 @@ from core.config import (
     WorkflowConfig,
     load_config,
 )
+from core.discovery import (
+    DiscoveryAnalysis,
+    DiscoveryCancelledError,
+    DiscoveryError,
+    gather_repo_context,
+    load_discovery_prompt,
+    run_discovery_phase,
+)
 from core.models import (
     Finding,
     FindingSeverity,
@@ -52,4 +60,10 @@ __all__ = [
     "CLIExecutionError",
     "APIResponseError",
     "JSONParseError",
+    "DiscoveryAnalysis",
+    "DiscoveryError",
+    "DiscoveryCancelledError",
+    "gather_repo_context",
+    "load_discovery_prompt",
+    "run_discovery_phase",
 ]

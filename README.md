@@ -9,9 +9,12 @@ MergeFlow/
 ├── config.yaml                # Example configuration (models, timeouts, retries, CLI binaries)
 ├── pyproject.toml             # Project metadata, dependencies, and test settings
 ├── requirements.txt           # Pip dependencies
+├── prompts/
+│   └── spec_discovery.md      # System prompt for Requirements Discovery & Architect Agent
 ├── core/
 │   ├── __init__.py            # Core package exports
 │   ├── config.py              # YAML and Pydantic Settings configuration loader
+│   ├── discovery.py           # Interactive discovery loop, blind spot analysis & spec generation
 │   ├── models.py              # Domain & workflow state models (Pydantic v2)
 │   └── provider.py            # LLM provider abstraction (CLI & API with JSON schema support)
 ├── security/
@@ -21,6 +24,7 @@ MergeFlow/
 │   └── shell_runner.py        # Async subprocess shell runner with streaming and timeouts
 └── tests/
     ├── test_config.py         # Config loading and validation test suite
+    ├── test_discovery.py      # Interactive discovery phase & approval loop test suite
     ├── test_gatekeeper.py     # Gatekeeper policies, sandbox escapes, LLM audit & runner tests
     ├── test_models.py         # Workflow state, findings, and spec test suite
     └── test_provider.py       # CLI and API provider test suite (mocked)
@@ -82,6 +86,38 @@ Phase 2 establishes a secure, autonomous shell execution sandbox for the Dev Age
      was_blocked: bool
      block_reason: str | None
      ```
+
+---
+
+## Phase 3: Requirements Discovery & Spec Generation
+
+Phase 3 implements the interactive CLI interface and Spec Agent for transforming raw, underspecified tasks into a validated, actionable specification (`SPEC.md`).
+
+1. **Context & Blind-Spot Discovery (`core/discovery.py`)**:
+   - Signature:
+     ```python
+     async def run_discovery_phase(
+         raw_requirements: str,
+         provider: BaseLLMProvider,
+         repo_path: Path,
+         console: Console | None = None,
+         input_func: Callable[[str], str] | None = None,
+     ) -> str
+     ```
+   - Automatically gathers repository context (`README.md`, `pyproject.toml`, `package.json`, project directory structure).
+   - Prompts the Discovery Agent (`prompts/spec_discovery.md`) to analyze requirements, identify architectural risks, unstated assumptions, and formulate numbered clarifying questions.
+
+2. **Interactive Rich CLI Dialog**:
+   - Presents summary and detected blind spots in styled panels via `rich`.
+   - Prompts the user to answer each clarifying question interactively.
+   - Submits answers back to the LLM agent to synthesize the authoritative `SPEC.md` complete with acceptance criteria checklists, interfaces, and edge cases.
+
+3. **Approval & Edit Workflow**:
+   - Displays rendered preview of `SPEC.md` and target path.
+   - Interactive choice prompt: `[A]pprove & Start Dev / [E]dit / [C]ancel`:
+     - **[A]pprove**: Writes `SPEC.md` to `repo_path / "SPEC.md"` and returns its content.
+     - **[E]dit**: Collects user feedback, re-queries the agent to update `SPEC.md`, and loops back for review.
+     - **[C]ancel**: Aborts cleanly by raising `DiscoveryCancelledError`.
 
 ---
 
