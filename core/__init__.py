@@ -16,9 +16,19 @@ from core.discovery import (
     load_discovery_prompt,
     run_discovery_phase,
 )
+from core.dev_loop import (
+    DevActionType,
+    DevAgentStep,
+    DevLoopError,
+    load_developer_prompt,
+    run_dev_phase,
+)
 from core.models import (
     Finding,
     FindingSeverity,
+    PipelineCheck,
+    PipelineState,
+    PipelineStatus,
     ReviewResult,
     Specification,
     WorkflowPhase,
@@ -47,6 +57,9 @@ __all__ = [
     "load_config",
     "Finding",
     "FindingSeverity",
+    "PipelineCheck",
+    "PipelineState",
+    "PipelineStatus",
     "ReviewResult",
     "Specification",
     "WorkflowPhase",
@@ -66,4 +79,9 @@ __all__ = [
     "gather_repo_context",
     "load_discovery_prompt",
     "run_discovery_phase",
+    "DevActionType",
+    "DevAgentStep",
+    "DevLoopError",
+    "load_developer_prompt",
+    "run_dev_phase",
 ]
