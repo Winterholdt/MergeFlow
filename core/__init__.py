@@ -23,6 +23,12 @@ from core.dev_loop import (
     load_developer_prompt,
     run_dev_phase,
 )
+from core.healing_loop import (
+    CIHealingError,
+    format_ci_commit_message,
+    load_ci_healing_prompt,
+    run_ci_healing_loop,
+)
 from core.models import (
     Finding,
     FindingSeverity,
@@ -30,9 +36,22 @@ from core.models import (
     PipelineState,
     PipelineStatus,
     ReviewResult,
+    ReviewSummary,
+    Severity,
     Specification,
     WorkflowPhase,
     WorkflowState,
+)
+from core.reviewer import (
+    REVIEWER_PERSONAS,
+    ReviewError,
+    ReviewParsingError,
+    consolidate_reviews,
+    format_review_report,
+    is_overall_approved,
+    load_reviewer_prompt,
+    run_multi_review,
+    run_review_phase,
 )
 from core.provider import (
     APIProvider,
@@ -57,10 +76,12 @@ __all__ = [
     "load_config",
     "Finding",
     "FindingSeverity",
+    "Severity",
     "PipelineCheck",
     "PipelineState",
     "PipelineStatus",
     "ReviewResult",
+    "ReviewSummary",
     "Specification",
     "WorkflowPhase",
     "WorkflowState",
@@ -84,4 +105,17 @@ __all__ = [
     "DevLoopError",
     "load_developer_prompt",
     "run_dev_phase",
+    "run_ci_healing_loop",
+    "load_ci_healing_prompt",
+    "format_ci_commit_message",
+    "CIHealingError",
+    "REVIEWER_PERSONAS",
+    "ReviewError",
+    "ReviewParsingError",
+    "load_reviewer_prompt",
+    "run_multi_review",
+    "consolidate_reviews",
+    "is_overall_approved",
+    "format_review_report",
+    "run_review_phase",
 ]

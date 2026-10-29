@@ -7,10 +7,113 @@ from core.models import (
     Finding,
     FindingSeverity,
     ReviewResult,
+    ReviewSummary,
+    Severity,
     Specification,
     WorkflowPhase,
     WorkflowState,
 )
+
+
+def test_severity_enum():
+    """Verify Severity enum values."""
+    assert Severity.BLOCKER.value == "BLOCKER"
+    assert Severity.WARNING.value == "WARNING"
+    assert Severity.NIT.value == "NIT"
+    assert FindingSeverity == Severity
+
+
+def test_finding_schema_and_normalization():
+    """Verify Finding model adheres to required schema."""
+    finding = Finding(
+        file="core/main.py",
+        line=42,
+        severity=Severity.BLOCKER,
+        issue="Null pointer exception possible",
+        suggestion="Add if check for None",
+    )
+    assert finding.file == "core/main.py"
+    assert finding.line == 42
+    assert finding.severity == Severity.BLOCKER
+    assert finding.issue == "Null pointer exception possible"
+    assert finding.suggestion == "Add if check for None"
+
+    # Case normalization
+    f_warn = Finding(
+        file="core/util.py",
+        severity="warning",
+        issue="Missing docstring",
+    )
+    assert f_warn.severity == Severity.WARNING
+    assert f_warn.line is None
+    assert f_warn.suggestion == ""
+
+
+def test_review_result_schema():
+    """Verify ReviewResult model with reviewer, status, summary, and findings."""
+    res = ReviewResult(
+        reviewer="functional",
+        status="APPROVED",
+        summary="All functional acceptance criteria verified.",
+        findings=[],
+    )
+    assert res.reviewer == "functional"
+    assert res.status == "APPROVED"
+    assert res.approved is True
+    assert res.findings == []
+
+    # Case normalization for status
+    res2 = ReviewResult(
+        reviewer="security",
+        status="changes_requested",
+        summary="Security issues detected",
+        findings=[
+            Finding(
+                file="core/auth.py",
+                line=12,
+                severity=Severity.BLOCKER,
+                issue="Hardcoded API secret",
+                suggestion="Use environment variable",
+            )
+        ],
+    )
+    assert res2.status == "CHANGES_REQUESTED"
+    assert res2.approved is False
+    assert len(res2.findings) == 1
+    assert res2.findings[0].severity == Severity.BLOCKER
+
+
+def test_review_summary_model():
+    """Verify ReviewSummary properties and consolidation schema."""
+    f1 = Finding(file="a.py", severity=Severity.BLOCKER, issue="Crash bug")
+    f2 = Finding(file="b.py", severity=Severity.WARNING, issue="Unused import")
+    r1 = ReviewResult(
+        reviewer="functional",
+        status="CHANGES_REQUESTED",
+        summary="Failed",
+        findings=[f1],
+    )
+    r2 = ReviewResult(
+        reviewer="architecture",
+        status="APPROVED",
+        summary="Passed",
+        findings=[f2],
+    )
+    summary = ReviewSummary(
+        all_approved=False,
+        has_blockers=True,
+        is_approved=False,
+        total_findings=2,
+        blockers=[f1],
+        warnings=[f2],
+        nits=[],
+        reviews=[r1, r2],
+    )
+    assert summary.all_approved is False
+    assert summary.has_blockers is True
+    assert summary.is_approved is False
+    assert summary.approved is False
+    assert len(summary.blockers) == 1
 
 
 def test_finding_defaults_and_validation():
@@ -23,35 +126,37 @@ def test_finding_defaults_and_validation():
         suggestion="Add ':' after condition",
     )
     assert finding.id is not None
-    assert finding.severity == FindingSeverity.MEDIUM
+    assert finding.severity == Severity.WARNING
     assert finding.line_number == 42
 
     with pytest.raises(ValidationError):
-        Finding(title="Error", description="Invalid", line_number=0)
+        Finding(file="test.py", severity=Severity.BLOCKER, issue="Err", line=0)
 
 
 def test_review_result_serialization():
     """Verify ReviewResult serialization and parsing."""
     result = ReviewResult(
-        approved=False,
+        reviewer="security",
+        status="CHANGES_REQUESTED",
         summary="Found 1 blocker issue.",
         findings=[
             Finding(
-                severity=FindingSeverity.HIGH,
-                title="Security vulnerability",
-                description="Hardcoded secret detected",
+                severity=Severity.BLOCKER,
+                file="core/secret.py",
+                issue="Security vulnerability: Hardcoded secret detected",
+                suggestion="Use environment variables",
             )
         ],
-        score=65.5,
     )
     data = result.model_dump()
-    assert data["approved"] is False
+    assert data["status"] == "CHANGES_REQUESTED"
+    assert result.approved is False
     assert len(data["findings"]) == 1
-    assert data["findings"][0]["severity"] == "HIGH"
+    assert data["findings"][0]["severity"] == "BLOCKER"
 
     restored = ReviewResult.model_validate(data)
     assert restored.approved == result.approved
-    assert restored.findings[0].title == "Security vulnerability"
+    assert restored.findings[0].issue == "Security vulnerability: Hardcoded secret detected"
 
 
 def test_specification_model():

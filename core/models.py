@@ -6,8 +6,8 @@ results, and diagnostic findings.
 
 from enum import Enum
 import uuid
-from typing import Any
-from pydantic import BaseModel, Field
+from typing import Any, Literal
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class WorkflowPhase(str, Enum):
@@ -77,71 +77,192 @@ class PipelineStatus(BaseModel):
     )
 
 
-class FindingSeverity(str, Enum):
-    """Severity levels for review or static analysis findings."""
+class Severity(str, Enum):
+    """Severity levels for code review findings."""
 
-    INFO = "INFO"
-    LOW = "LOW"
-    MEDIUM = "MEDIUM"
-    HIGH = "HIGH"
-    CRITICAL = "CRITICAL"
+    BLOCKER = "BLOCKER"
+    WARNING = "WARNING"
+    NIT = "NIT"
+
+
+FindingSeverity = Severity
 
 
 class Finding(BaseModel):
-    """Represents a diagnostic issue, bug, or improvement recommendation."""
+    """Represents a code review finding or diagnostic issue."""
 
     id: str = Field(
         default_factory=lambda: str(uuid.uuid4()),
         description="Unique identifier for the finding.",
     )
-    severity: FindingSeverity | str = Field(
-        default=FindingSeverity.MEDIUM,
-        description="Severity level of the finding.",
-    )
-    title: str = Field(
+    file: str = Field(
         ...,
-        description="Brief headline describing the finding.",
+        description="Path of the affected file relative to repository root.",
     )
-    description: str = Field(
-        ...,
-        description="Detailed description of the issue or improvement opportunity.",
-    )
-    file_path: str | None = Field(
-        default=None,
-        description="Relative or absolute path to the affected file.",
-    )
-    line_number: int | None = Field(
+    line: int | None = Field(
         default=None,
         ge=1,
         description="Line number in the affected file, if applicable.",
     )
-    suggestion: str | None = Field(
-        default=None,
-        description="Concrete suggestion or code patch to resolve the issue.",
+    severity: Severity = Field(
+        ...,
+        description="Severity level of the finding (BLOCKER, WARNING, NIT).",
     )
+    issue: str = Field(
+        ...,
+        description="Clear description of the issue or concern.",
+    )
+    suggestion: str = Field(
+        default="",
+        description="Actionable suggestion or code patch to resolve the issue.",
+    )
+
+    @field_validator("severity", mode="before")
+    @classmethod
+    def _normalize_severity(cls, v: Any) -> Severity | str:
+        if isinstance(v, str):
+            v_clean = v.strip().upper()
+            if v_clean in {"BLOCKER", "CRITICAL", "HIGH"}:
+                return Severity.BLOCKER
+            if v_clean in {"WARNING", "WARN", "MEDIUM"}:
+                return Severity.WARNING
+            if v_clean in {"NIT", "INFO", "LOW"}:
+                return Severity.NIT
+        return v
+
+    @model_validator(mode="before")
+    @classmethod
+    def _map_legacy_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "file" not in data and "file_path" in data:
+                data["file"] = data.get("file_path") or ""
+            if "line" not in data and "line_number" in data:
+                data["line"] = data.get("line_number")
+            if "issue" not in data:
+                data["issue"] = data.get("title") or data.get("description") or ""
+            if "suggestion" not in data:
+                data["suggestion"] = data.get("suggestion") or ""
+            if "file" not in data:
+                data["file"] = ""
+            if "severity" not in data:
+                data["severity"] = Severity.WARNING
+        return data
+
+    @property
+    def file_path(self) -> str:
+        return self.file
+
+    @property
+    def line_number(self) -> int | None:
+        return self.line
+
+    @property
+    def title(self) -> str:
+        return self.issue
+
+    @property
+    def description(self) -> str:
+        return self.issue
 
 
 class ReviewResult(BaseModel):
-    """Evaluation result emitted by the review agent."""
+    """Evaluation result emitted by an individual persona review agent."""
 
-    approved: bool = Field(
+    reviewer: str = Field(
         ...,
-        description="Whether the reviewed code meets quality standards and passes review.",
+        description="Identifier of the review persona (e.g., functional, architecture, security, qa_testing).",
+    )
+    status: Literal["APPROVED", "CHANGES_REQUESTED"] = Field(
+        ...,
+        description="Approval decision: APPROVED or CHANGES_REQUESTED.",
     )
     summary: str = Field(
         ...,
-        description="High-level evaluation summary.",
+        description="Evaluation summary explaining the review findings and outcome.",
     )
     findings: list[Finding] = Field(
         default_factory=list,
         description="List of detected findings or issues.",
     )
-    score: float | None = Field(
-        default=None,
-        ge=0.0,
-        le=100.0,
-        description="Optional quality score (0-100).",
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _normalize_status(cls, v: Any) -> str:
+        if isinstance(v, str):
+            v_clean = v.strip().upper()
+            if v_clean in {"APPROVED", "APPROVE", "PASS", "PASSED"}:
+                return "APPROVED"
+            if v_clean in {
+                "CHANGES_REQUESTED",
+                "CHANGE_REQUESTED",
+                "REJECTED",
+                "REJECT",
+                "FAIL",
+                "FAILED",
+            }:
+                return "CHANGES_REQUESTED"
+        return v
+
+    @model_validator(mode="before")
+    @classmethod
+    def _map_legacy_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "status" not in data and "approved" in data:
+                data["status"] = "APPROVED" if data["approved"] else "CHANGES_REQUESTED"
+            if "reviewer" not in data:
+                data["reviewer"] = "reviewer"
+        return data
+
+    @property
+    def approved(self) -> bool:
+        """Convenience property indicating whether review was approved."""
+        return self.status == "APPROVED"
+
+
+class ReviewSummary(BaseModel):
+    """Aggregated multi-persona review summary."""
+
+    all_approved: bool = Field(
+        ...,
+        description="Whether all individual persona reviews have status APPROVED.",
     )
+    has_blockers: bool = Field(
+        ...,
+        description="Whether any finding has severity BLOCKER.",
+    )
+    is_approved: bool = Field(
+        ...,
+        description="Overall approval: True if all reviews APPROVED and zero BLOCKER findings.",
+    )
+    total_findings: int = Field(
+        default=0,
+        description="Total number of findings across all reviews.",
+    )
+    blockers: list[Finding] = Field(
+        default_factory=list,
+        description="All findings with severity BLOCKER.",
+    )
+    warnings: list[Finding] = Field(
+        default_factory=list,
+        description="All findings with severity WARNING.",
+    )
+    nits: list[Finding] = Field(
+        default_factory=list,
+        description="All findings with severity NIT.",
+    )
+    reviews: list[ReviewResult] = Field(
+        default_factory=list,
+        description="Individual persona review results.",
+    )
+    markdown_report: str = Field(
+        default="",
+        description="Human-readable markdown summary report.",
+    )
+
+    @property
+    def approved(self) -> bool:
+        """Alias for is_approved."""
+        return self.is_approved
 
 
 class Specification(BaseModel):
