@@ -13,65 +13,9 @@ import re
 import shutil
 from typing import Any
 
-from pydantic import BaseModel, Field
+from core.models import PipelineCheck, PipelineState, PipelineStatus
 
 logger = logging.getLogger(__name__)
-
-
-class PipelineState(str, Enum):
-    """States of remote CI pipeline or PR checks."""
-
-    PENDING = "PENDING"
-    RUNNING = "RUNNING"
-    SUCCESS = "SUCCESS"
-    FAILED = "FAILED"
-    UNKNOWN = "UNKNOWN"
-
-
-class PipelineCheck(BaseModel):
-    """Individual CI check or pipeline step evaluation."""
-
-    name: str = Field(
-        ...,
-        description="Name of the pipeline check or workflow step.",
-    )
-    status: str = Field(
-        default="completed",
-        description="Execution status of the check (e.g., completed, in_progress, queued).",
-    )
-    conclusion: str | None = Field(
-        default=None,
-        description="Conclusion outcome of the check (e.g., success, failure, neutral, cancelled).",
-    )
-    details_url: str | None = Field(
-        default=None,
-        description="Direct URL to logs or details for this check.",
-    )
-
-
-class PipelineStatus(BaseModel):
-    """Aggregated status of remote CI checks or GitLab pipelines."""
-
-    state: PipelineState | str = Field(
-        default=PipelineState.PENDING,
-        description="Aggregated status of all checks.",
-    )
-    all_passed: bool = Field(
-        default=False,
-        description="Whether all required checks passed successfully.",
-    )
-    checks: list[PipelineCheck] = Field(
-        default_factory=list,
-        description="Individual status of each check item.",
-    )
-    url: str | None = Field(
-        default=None,
-        description="URL to the remote PR, MR, or pipeline dashboard.",
-    )
-    raw_output: str = Field(
-        default="",
-        description="Raw output produced by the CLI tool during inspection.",
-    )
 
 
 class VCSType(str, Enum):

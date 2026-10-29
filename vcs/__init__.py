@@ -11,8 +11,16 @@ from vcs.git_handler import (
     create_feature_branch,
     ensure_conventional_commit,
     get_diff,
+    get_recent_commits,
     is_conventional_commit,
     push_branch,
+)
+from vcs.ci_watcher import (
+    CIWatcher,
+    PipelineResult,
+    extract_relevant_errors,
+    filter_ci_noise,
+    wait_for_pipeline,
 )
 from vcs.remote_vcs import (
     PipelineCheck,
@@ -43,4 +51,10 @@ __all__ = [
     "VCSType",
     "create_draft_pr",
     "get_pipeline_status",
+    "CIWatcher",
+    "PipelineResult",
+    "wait_for_pipeline",
+    "extract_relevant_errors",
+    "filter_ci_noise",
+    "get_recent_commits",
 ]

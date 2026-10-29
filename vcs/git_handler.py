@@ -273,6 +273,24 @@ class GitHandler:
         _, stdout, _ = await self._run_git("status", "--porcelain")
         return bool(stdout.strip())
 
+    async def get_recent_commits(self, count: int = 5) -> str:
+        """Get summary of recent commits on current branch.
+
+        Args:
+            count: Number of recent commits to return.
+
+        Returns:
+            Formatted log lines of recent commits.
+        """
+        code, stdout, _ = await self._run_git(
+            "log",
+            "-n",
+            str(max(1, count)),
+            "--pretty=format:%h %s",
+            check=False,
+        )
+        return stdout.strip() if code == 0 else ""
+
     async def commit_changes(self, message: str) -> str:
         """Stage all changes and commit with Conventional Commits message.
 
@@ -365,3 +383,12 @@ async def push_branch(
     """Push branch to remote."""
     handler = GitHandler(repo_path=repo_path)
     return await handler.push_branch(branch=branch, remote=remote)
+
+
+async def get_recent_commits(
+    count: int = 5,
+    repo_path: Path | str = ".",
+) -> str:
+    """Get recent commit summaries."""
+    handler = GitHandler(repo_path=repo_path)
+    return await handler.get_recent_commits(count=count)

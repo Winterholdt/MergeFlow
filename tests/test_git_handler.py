@@ -16,6 +16,7 @@ from vcs.git_handler import (
     get_diff,
     is_conventional_commit,
     push_branch,
+    get_recent_commits,
     sanitize_slug,
 )
 
@@ -195,3 +196,6 @@ async def test_module_convenience_functions(git_repo: Path):
 
     diff = await get_diff("main", repo_path=git_repo)
     assert "quick.txt" in diff
+
+    commits = await get_recent_commits(count=5, repo_path=git_repo)
+    assert "quick commit" in commits
