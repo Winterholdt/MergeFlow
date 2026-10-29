@@ -143,11 +143,17 @@ async def test_resume_skips_completed_phases(repo_sandbox: Path, tmp_path: Path)
         passed=True,
     )
 
+    clean_reviews = [
+        ReviewResult(reviewer="functional", status="APPROVED", summary="OK"),
+        ReviewResult(reviewer="architecture", status="APPROVED", summary="OK"),
+        ReviewResult(reviewer="security", status="APPROVED", summary="OK"),
+        ReviewResult(reviewer="qa_testing", status="APPROVED", summary="OK"),
+    ]
     clean_summary = ReviewSummary(
         all_approved=True,
         has_blockers=False,
         is_approved=True,
-        reviews=[ReviewResult(reviewer="functional", status="APPROVED", summary="OK")],
+        reviews=clean_reviews,
     )
 
     orchestrator = Orchestrator(
@@ -434,6 +440,7 @@ async def test_scope_drift_guard_detection(repo_sandbox: Path):
 async def test_shell_runner_non_interactive_env_and_timeout(repo_sandbox: Path):
     """ShellRunner enforces noninteractive CI env vars and kills process on timeout."""
     gatekeeper = Gatekeeper(repo_root=repo_sandbox)
+    gatekeeper.validate_command = AsyncMock(return_value=MagicMock(is_allowed=True, reason=None))
     runner = ShellRunner(gatekeeper=gatekeeper, repo_root=repo_sandbox)
     state = WorkflowState(task_id="timeout-task", raw_requirements="test")
 
