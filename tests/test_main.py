@@ -135,3 +135,36 @@ async def test_async_main_interactive_prompt():
     assert code == 0
     mock_run.assert_called_once()
     assert mock_run.call_args.kwargs["requirements"] == "Interactive requirement prompt"
+
+
+@pytest.mark.asyncio
+async def test_async_main_interactive_flag():
+    """Verify that --interactive launches run_interactive_session."""
+    parser = build_parser()
+    args = parser.parse_args(["--interactive"])
+
+    with patch("main.run_interactive_session", new_callable=AsyncMock) as mock_interactive:
+        mock_interactive.return_value = 0
+        code = await async_main(args)
+
+    assert code == 0
+    mock_interactive.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_async_main_prompt_slash_command():
+    """Verify that entering a slash command at the prompt launches interactive session."""
+    parser = build_parser()
+    args = parser.parse_args([])
+
+    with (
+        patch("sys.stdin.isatty", return_value=True),
+        patch("main.console.input", return_value="/help"),
+        patch("main.run_interactive_session", new_callable=AsyncMock) as mock_interactive,
+    ):
+        mock_interactive.return_value = 0
+        code = await async_main(args)
+
+    assert code == 0
+    mock_interactive.assert_called_once()
+

@@ -119,7 +119,7 @@ def test_determine_resume_phase():
 
 @pytest.mark.asyncio
 async def test_resume_skips_completed_phases(repo_sandbox: Path, tmp_path: Path):
-    """Resuming from CI_LOOP skips Phase 3 (Discovery) and Phase 4 (Dev Loop)."""
+    """Resuming from CI_LOOP skips Phase 1 (Discovery) and Phase 2 (Dev Loop)."""
     state_file = tmp_path / "resume_state.json"
 
     # Pre-populate state in CI_LOOP
@@ -191,7 +191,7 @@ async def test_resume_skips_completed_phases(repo_sandbox: Path, tmp_path: Path)
             resume_from_state=True,
         )
 
-    # Verification: Phase 3 and Phase 4 were skipped!
+    # Verification: Phase 1 and Phase 2 were skipped!
     assert not discovery_called
     assert not dev_called
     assert final_state.current_phase == WorkflowPhase.DONE.value

@@ -6,19 +6,17 @@ MergeFlow is a modular, autonomous multi-agent orchestration framework designed 
 
 ## Workflow Overview
 
-MergeFlow coordinates autonomous agents through a structured 7-phase pipeline:
+MergeFlow coordinates autonomous agents through a structured 5-phase pipeline with built-in security guardrails and self-healing:
 
-1. **Requirements Discovery & Spec Generation**: Interactive CLI dialog that identifies architectural risks and blind spots, asks clarifying questions, and produces a validated `SPEC.md`.
-2. **Command Gatekeeper & Sandbox**: Strict security engine combining fast-path allowlists, regex blocklists, and LLM safety audits to safely execute commands autonomously.
-3. **Autonomous Developer Loop**: Iteratively implements code, creates targeted commits, and runs local verification tests.
-4. **CI Self-Healing**: Monitors remote CI pipelines, extracts failure logs, and automatically generates fixes.
-5. **Multi-Persona Code Review**: Evaluates changes against four independent review personas:
+1. **Phase 1: Requirements Discovery & Spec Generation**: Interactive CLI dialog that analyzes repository context, uncovers blind spots, asks clarifying questions, and produces an authoritative, validated `SPEC.md`.
+2. **Phase 2: Autonomous Developer Loop (with Command Gatekeeper Sandbox)**: Creates feature branches, iteratively implements code, runs tests, and creates Conventional Commits. All terminal commands and file edits are strictly validated by the Gatekeeper security engine (allowlists, blocklists, and LLM safety audits).
+3. **Phase 3: Self-Healing CI Loop**: Monitors remote CI pipelines (GitHub Actions / GitLab CI), extracts failure logs, and automatically generates targeted fixes with circuit-breaker protection.
+4. **Phase 4: Multi-Persona Code Review**: Evaluates pull request diffs concurrently across four independent review personas:
    - **Functional**: Requirements compliance & edge-case coverage.
    - **Architecture**: SOLID principles, modularity & code quality.
    - **Security**: OWASP Top 10 vulnerabilities & data validation.
    - **QA / Testing**: Unit/integration test quality & assertion robustness.
-6. **Consensus & Remediation**: Aggregates findings and feeds actionable feedback back into the developer loop until all blockers are resolved (with circuit-breaker protection).
-7. **Auto-Merge**: Automatically merges passing pull requests via GitHub (`gh`) or GitLab (`glab`), or requests manual confirmation.
+5. **Phase 5: Consensus, Remediation & Auto-Merge**: Aggregates review findings; if revisions are required, loops back into Phase 2 for remediation. Once all checks pass and all personas approve with 0 blockers, automatically merges passing PRs via GitHub (`gh`) or GitLab (`glab`) or requests confirmation.
 
 ---
 

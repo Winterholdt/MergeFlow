@@ -3,9 +3,11 @@
 Enables starting the orchestrator via:
   python main.py "Implement user authentication with JWT..."
 or:
+  python main.py --interactive
+or:
   python main.py --file requirements.txt
 
-Loads configuration, initializes state, executes Phases 1 to 7 sequentially,
+Loads configuration, initializes state, executes Phases 1 to 5 sequentially,
 and persists workflow state after every phase.
 """
 
@@ -18,6 +20,8 @@ import sys
 from rich.console import Console
 from rich.panel import Panel
 
+from core.cli.interactive import run_interactive_session
+from core.cli.logger import setup_cli_logging
 from core.discovery import DiscoveryCancelledError
 from core.models import WorkflowPhase
 from core.orchestrator import run_orchestrator
@@ -34,11 +38,12 @@ def build_parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(
         prog="mergeflow",
-        description="MergeFlow: Autonomous Multi-Agent Orchestrator (Phases 1-7)",
+        description="MergeFlow: Autonomous Multi-Agent Orchestrator (Phases 1-5)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   orch
+  orch --interactive
   orch "Add an export to CSV endpoint in the reports module"
   orch Add an export to CSV endpoint in the reports module
   orch --file requirements.txt
@@ -126,6 +131,13 @@ Examples:
     )
 
     parser.add_argument(
+        "-i",
+        "--interactive",
+        dest="interactive",
+        action="store_true",
+        help="Launch interactive REPL mode (Antigravity-style shell with slash commands).",
+    )
+    parser.add_argument(
         "--debug",
         dest="debug",
         action="store_true",
@@ -144,13 +156,18 @@ async def async_main(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success, non-zero for error).
     """
+    # Check if explicit interactive REPL requested
+    if getattr(args, "interactive", False):
+        return await run_interactive_session(
+            config_path=args.config_path,
+            repo_path=args.repo_path,
+            state_path=args.state_path,
+            console=console,
+            debug=args.debug,
+        )
+
     # Configure logging
-    log_level = logging.DEBUG if args.debug else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    setup_cli_logging(console=console, debug=args.debug)
 
     # Resolve requirements input or resume state
     requirements_text: str | None = None
@@ -210,6 +227,14 @@ async def async_main(args: argparse.Namespace) -> int:
             try:
                 user_prompt = console.input("[bold cyan]Prompt > [/bold cyan]").strip()
                 if user_prompt and user_prompt.lower() not in ("exit", "quit", "q"):
+                    if user_prompt.startswith("/") or user_prompt.lower() in ("repl", "interactive", "menu"):
+                        return await run_interactive_session(
+                            config_path=args.config_path,
+                            repo_path=args.repo_path,
+                            state_path=args.state_path,
+                            console=console,
+                            debug=args.debug,
+                        )
                     requirements_text = user_prompt
             except (EOFError, KeyboardInterrupt):
                 console.print("\n[yellow]Vorgang durch Benutzer abgebrochen.[/yellow]")

@@ -1,4 +1,4 @@
-"""Comprehensive tests for CI-Watcher and log extraction engine (Phase 5)."""
+"""Comprehensive tests for CI-Watcher and log extraction engine (Phase 3)."""
 
 import asyncio
 from pathlib import Path

@@ -1,4 +1,4 @@
-"""Test suite for Phase 3: Requirements Discovery & Specification Loop."""
+"""Test suite for Phase 1: Requirements Discovery & Specification Loop."""
 
 from pathlib import Path
 from unittest.mock import AsyncMock

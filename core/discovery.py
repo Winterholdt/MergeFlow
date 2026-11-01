@@ -1,6 +1,6 @@
 """Interactive Requirements Discovery & Specification Loop for MergeFlow.
 
-This module coordinates Phase 3 of the orchestration pipeline:
+This module coordinates Phase 1 of the orchestration pipeline:
 1. Gathers repository context (tech stack, dependencies, README).
 2. Sends the discovery prompt to the LLM provider to uncover blind spots and formulate clarifying questions.
 3. Interactively presents questions to the user in the terminal via Rich and collects answers.
@@ -269,7 +269,7 @@ async def run_discovery_phase(
 
     ui_console.print(
         Panel(
-            "[bold cyan]Phase 3: Requirements Discovery & Spec Generation[/bold cyan]\n"
+            "[bold cyan]Phase 1: Requirements Discovery & Spec Generation[/bold cyan]\n"
             "Analyzing repository context, detecting blind spots, and preparing specification...",
             title="[bold blue]MergeFlow Orchestrator[/bold blue]",
             border_style="blue",
@@ -433,7 +433,7 @@ async def run_discovery_phase(
                 ui_console.print(
                     Panel(
                         f"[bold green]✓ SPEC.md erfolgreich gespeichert unter:[/bold green]\n{spec_target_path.resolve()}\n\n"
-                        "[cyan]Bereit für Phase 4: Coding Agent.[/cyan]",
+                        "[cyan]Bereit für Phase 2: Coding Agent.[/cyan]",
                         title="[bold green]Spezifikation Freigegeben[/bold green]",
                         border_style="green",
                     )

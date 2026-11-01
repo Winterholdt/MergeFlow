@@ -1,4 +1,4 @@
-"""Comprehensive tests for Self-Healing CI Loop controller (Phase 5)."""
+"""Comprehensive tests for Self-Healing CI Loop controller (Phase 3)."""
 
 import asyncio
 from pathlib import Path

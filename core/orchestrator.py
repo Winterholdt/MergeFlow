@@ -1,13 +1,11 @@
 """Central Orchestrator & State Machine controller for MergeFlow.
 
-Coordinates the end-to-end autonomous lifecycle across all 7 phases:
-- Phase 1: Foundation (Config, Provider, WorkflowState initialization)
-- Phase 2: Security & Gatekeeper (Policy enforcement, command validation, shell runner)
-- Phase 3: Requirements Discovery & Specification (Clarifications, SPEC.md generation & approval)
-- Phase 4: Developer Agent Loop (Branching, coding, Gatekeeper execution, Conventional Commits, draft PR)
-- Phase 5: Self-Healing CI Loop (Pipeline watching, failure diagnosis, self-healing, retry circuit breaker)
-- Phase 6: Multi-Persona Code Review (Parallel reviews across 4 personas, finding consolidation)
-- Phase 7: Consensus, Feedback Loop & Auto-Merge (Re-review loops up to 3 times, auto-merge or interactive confirmation)
+Coordinates the end-to-end autonomous lifecycle across all 5 phases:
+- Phase 1: Requirements Discovery & Specification (Clarifications, SPEC.md generation & approval)
+- Phase 2: Autonomous Developer Loop (Branching, coding, Gatekeeper execution, Conventional Commits, draft PR)
+- Phase 3: Self-Healing CI Loop (Pipeline watching, failure diagnosis, self-healing, retry circuit breaker)
+- Phase 4: Multi-Persona Code Review (Parallel reviews across 4 personas, finding consolidation)
+- Phase 5: Consensus, Feedback Loop & Auto-Merge (Re-review loops up to 3 times, auto-merge or interactive confirmation)
 
 Guarantees persistence of WorkflowState after every phase and step.
 """
@@ -70,7 +68,7 @@ class OrchestratorError(Exception):
 
 
 class Orchestrator:
-    """Central controller and state machine coordinating Phase 1 to Phase 7."""
+    """Central controller and state machine coordinating Phase 1 to Phase 5."""
 
     def __init__(
         self,
@@ -193,10 +191,10 @@ class Orchestrator:
             return self.state
 
         # =====================================================================
-        # Phase 3: Requirements Discovery & Spec Generation
+        # Phase 1: Requirements Discovery & Spec Generation
         # =====================================================================
         if not self.state.spec_markdown and resume_phase in (None, WorkflowPhase.SPEC_DISCOVERY):
-            logger.info("Starting Phase 3: Requirements Discovery & Spec Generation...")
+            logger.info("Starting Phase 1: Requirements Discovery & Spec Generation...")
             self.state.transition_to(WorkflowPhase.SPEC_DISCOVERY)
             self.save_state()
 
@@ -212,33 +210,33 @@ class Orchestrator:
                 )
                 self.state.spec_markdown = spec_markdown
                 self.save_state()
-                logger.info("Phase 3 complete. SPEC.md created and approved.")
+                logger.info("Phase 1 complete. SPEC.md created and approved.")
             except DiscoveryCancelledError:
                 logger.warning("Discovery phase was cancelled by user.")
                 self.state.transition_to(WorkflowPhase.FAILED)
                 self.save_state()
                 raise
             except Exception as exc:
-                logger.error("Error in Phase 3 Discovery: %s", exc)
+                logger.error("Error in Phase 1 Discovery: %s", exc)
                 self.state.transition_to(WorkflowPhase.FAILED)
                 self.save_state()
-                raise OrchestratorError(f"Phase 3 Discovery failed: {exc}") from exc
+                raise OrchestratorError(f"Phase 1 Discovery failed: {exc}") from exc
         else:
-            logger.info("Existing SPEC.md found or resuming later phase. Skipping Phase 3 Discovery.")
+            logger.info("Existing SPEC.md found or resuming later phase. Skipping Phase 1 Discovery.")
 
         # =====================================================================
-        # Phases 4 - 7: Dev Loop, CI Healing, Code Review & Consensus Loop
+        # Phases 2 - 5: Dev Loop, CI Healing, Code Review & Consensus Loop
         # =====================================================================
         feedback_for_dev: str | None = None
         skip_to_phase: WorkflowPhase | None = resume_phase
 
         while True:
             # -----------------------------------------------------------------
-            # Phase 4: Developer Agent Loop
+            # Phase 2: Developer Agent Loop
             # -----------------------------------------------------------------
             if skip_to_phase not in (WorkflowPhase.CI_LOOP, WorkflowPhase.REVIEW, WorkflowPhase.CONSENSUS):
                 logger.info(
-                    "Starting Phase 4: Dev-Agent Loop (Branch: %s, Review Round: %d)...",
+                    "Starting Phase 2: Dev-Agent Loop (Branch: %s, Review Round: %d)...",
                     self.state.branch_name or "new",
                     self.state.review_retry_count,
                 )
@@ -258,20 +256,20 @@ class Orchestrator:
                         skill_manager=self.skill_manager,
                     )
                     self.save_state()
-                    logger.info("Phase 4 Dev-Loop finished. Transitioned to CI_LOOP.")
+                    logger.info("Phase 2 Dev-Loop finished. Transitioned to CI_LOOP.")
                 except Exception as exc:
-                    logger.error("Phase 4 Dev-Loop failed: %s", exc)
+                    logger.error("Phase 2 Dev-Loop failed: %s", exc)
                     self.state.transition_to(WorkflowPhase.FAILED)
                     self.save_state()
-                    raise OrchestratorError(f"Phase 4 Dev-Loop failed: {exc}") from exc
+                    raise OrchestratorError(f"Phase 2 Dev-Loop failed: {exc}") from exc
             else:
-                logger.info("Resuming: Skipping Phase 4 Dev-Loop to resume at %s.", skip_to_phase.value)
+                logger.info("Resuming: Skipping Phase 2 Dev-Loop to resume at %s.", skip_to_phase.value)
 
             # -----------------------------------------------------------------
-            # Phase 5: Self-Healing CI Loop
+            # Phase 3: Self-Healing CI Loop
             # -----------------------------------------------------------------
             if skip_to_phase not in (WorkflowPhase.REVIEW, WorkflowPhase.CONSENSUS):
-                logger.info("Starting Phase 5: Self-Healing CI Loop...")
+                logger.info("Starting Phase 3: Self-Healing CI Loop...")
                 self.state.transition_to(WorkflowPhase.CI_LOOP)
                 self.save_state()
 
@@ -292,24 +290,24 @@ class Orchestrator:
                     self.save_state()
 
                     if not ci_passed:
-                        logger.error("Phase 5 CI loop failed or circuit breaker triggered.")
+                        logger.error("Phase 3 CI loop failed or circuit breaker triggered.")
                         if self.state.current_phase != WorkflowPhase.HUMAN_INTERVENTION_REQUIRED.value:
                             self.state.transition_to(WorkflowPhase.FAILED)
                         self.save_state()
                         return self.state
                 except Exception as exc:
-                    logger.error("Phase 5 CI Healing encountered fatal error: %s", exc)
+                    logger.error("Phase 3 CI Healing encountered fatal error: %s", exc)
                     self.state.transition_to(WorkflowPhase.FAILED)
                     self.save_state()
-                    raise OrchestratorError(f"Phase 5 CI Healing failed: {exc}") from exc
+                    raise OrchestratorError(f"Phase 3 CI Healing failed: {exc}") from exc
             else:
-                logger.info("Resuming: Skipping Phase 5 CI Loop to resume at %s.", skip_to_phase.value)
+                logger.info("Resuming: Skipping Phase 3 CI Loop to resume at %s.", skip_to_phase.value)
 
             # -----------------------------------------------------------------
-            # Phase 6: Parallel Multi-Persona Code Review
+            # Phase 4: Parallel Multi-Persona Code Review
             # -----------------------------------------------------------------
             if skip_to_phase != WorkflowPhase.CONSENSUS:
-                logger.info("Starting Phase 6: Parallel Multi-Persona Code Review...")
+                logger.info("Starting Phase 4: Parallel Multi-Persona Code Review...")
                 self.state.transition_to(WorkflowPhase.REVIEW)
                 self.save_state()
 
@@ -327,18 +325,18 @@ class Orchestrator:
                     )
                     self.save_state()
                     logger.info(
-                        "Phase 6 Review completed. All approved=%s, Blockers=%d, Warnings=%d",
+                        "Phase 4 Review completed. All approved=%s, Blockers=%d, Warnings=%d",
                         review_summary.all_approved,
                         len(review_summary.blockers),
                         len(review_summary.warnings),
                     )
                 except Exception as exc:
-                    logger.error("Phase 6 Code Review failed: %s", exc)
+                    logger.error("Phase 4 Code Review failed: %s", exc)
                     self.state.transition_to(WorkflowPhase.FAILED)
                     self.save_state()
-                    raise OrchestratorError(f"Phase 6 Code Review failed: {exc}") from exc
+                    raise OrchestratorError(f"Phase 4 Code Review failed: {exc}") from exc
             else:
-                logger.info("Resuming: Skipping Phase 6 Code Review to resume at %s.", skip_to_phase.value)
+                logger.info("Resuming: Skipping Phase 4 Code Review to resume at %s.", skip_to_phase.value)
                 review_summary = ReviewSummary(
                     all_approved=False,
                     has_blockers=any(f.severity == Severity.BLOCKER for f in self.state.findings),
@@ -347,10 +345,10 @@ class Orchestrator:
                 )
 
             # -----------------------------------------------------------------
-            # Phase 7: Consensus, Feedback Loop & Auto-Merge
+            # Phase 5: Consensus, Feedback Loop & Auto-Merge
             # -----------------------------------------------------------------
             skip_to_phase = None
-            logger.info("Starting Phase 7: Consensus Evaluation & Auto-Merge...")
+            logger.info("Starting Phase 5: Consensus Evaluation & Auto-Merge...")
             self.state.transition_to(WorkflowPhase.CONSENSUS)
             self.save_state()
 
@@ -380,7 +378,7 @@ class Orchestrator:
                         self.config.workflow.review_max_retries,
                     )
                     feedback_for_dev = decision.feedback_markdown
-                    # Continue while loop back to Phase 4
+                    # Continue while loop back to Phase 2
                     continue
 
                 else:
@@ -392,10 +390,10 @@ class Orchestrator:
                     break
 
             except Exception as exc:
-                logger.error("Phase 7 Consensus encountered error: %s", exc)
+                logger.error("Phase 5 Consensus encountered error: %s", exc)
                 self.state.transition_to(WorkflowPhase.FAILED)
                 self.save_state()
-                raise OrchestratorError(f"Phase 7 Consensus failed: {exc}") from exc
+                raise OrchestratorError(f"Phase 5 Consensus failed: {exc}") from exc
 
         self.save_state()
         return self.state

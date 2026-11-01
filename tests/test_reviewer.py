@@ -1,4 +1,4 @@
-"""Unit tests for Phase 6 Multi-Persona Code Reviewer."""
+"""Unit tests for Phase 4 Multi-Persona Code Reviewer."""
 
 import asyncio
 from pathlib import Path

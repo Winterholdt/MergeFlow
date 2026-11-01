@@ -1,4 +1,4 @@
-"""Unit and integration tests for Phase 7 Consensus & Auto-Merge."""
+"""Unit and integration tests for Phase 5 Consensus & Auto-Merge."""
 
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -157,7 +157,7 @@ def test_format_review_feedback_markdown_and_json():
 
 
 # ===========================================================================
-# 3. PHASE 7 CONSENSUS EXECUTION (FALL A & FALL B)
+# 3. PHASE 5 CONSENSUS EXECUTION (FALL A & FALL B)
 # ===========================================================================
 
 @pytest.mark.asyncio

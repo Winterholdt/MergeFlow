@@ -1,4 +1,4 @@
-"""Self-Healing CI Loop controller for MergeFlow orchestrator (Phase 5).
+"""Self-Healing CI Loop controller for MergeFlow orchestrator (Phase 3).
 
 Coordinates autonomous pipeline monitoring and self-healing remediation:
 1. Polls remote pipeline status via CIWatcher until completion or failure.
@@ -225,10 +225,10 @@ async def run_ci_healing_loop(
     console: Console | None = None,
     input_func: Callable[[str], str] | None = None,
 ) -> bool:
-    """Execute Phase 5: CI-Watcher & Self-Healing Loop with Circuit-Breaker.
+    """Execute Phase 3: CI-Watcher & Self-Healing Loop with Circuit-Breaker.
 
     1. Polls the remote pipeline via CIWatcher until completion or failure.
-    2. If green: completes Phase 5 successfully and transitions to REVIEW.
+    2. If green: completes Phase 3 successfully and transitions to REVIEW.
     3. If red and retry_count < max_retries:
        - Increments retry_count.
        - Dispatches filtered failure logs and recent commit log to the Healing Agent.
@@ -295,7 +295,7 @@ async def run_ci_healing_loop(
 
         # Step 2: Pipeline is green
         if pipeline_result.passed:
-            logger.info("CI pipeline passed! Phase 5 Self-Healing completed successfully.")
+            logger.info("CI pipeline passed! Phase 3 Self-Healing completed successfully.")
             state.transition_to(WorkflowPhase.REVIEW)
             return True
 

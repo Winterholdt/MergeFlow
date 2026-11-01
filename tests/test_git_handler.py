@@ -1,4 +1,4 @@
-"""Comprehensive tests for GitHandler and local Git operations (Phase 4)."""
+"""Comprehensive tests for GitHandler and local Git operations (Phase 2)."""
 
 import asyncio
 from pathlib import Path

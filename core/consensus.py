@@ -1,12 +1,12 @@
-"""Consensus & Auto-Merge controller for MergeFlow orchestrator (Phase 7).
+"""Consensus & Auto-Merge controller for MergeFlow orchestrator (Phase 5).
 
-Coordinates Phase 7 of the orchestration workflow:
+Coordinates Phase 5 of the orchestration workflow:
 1. Evaluates code review results across all 4 personas (functional, architecture, security, qa_testing).
 2. Fall A: If any review is not APPROVED or open BLOCKER / WARNING findings exist:
    - Formats all findings into a structured Markdown document with an embedded JSON representation.
    - Checks the re-review retry limit (maximum 3 iterations by default).
    - If retry limit exceeded, triggers the circuit breaker, transitioning state to FAILED.
-   - If within limit, increments retry count, updates findings, and signals re-entry to Phase 4 (Dev-Loop).
+   - If within limit, increments retry count, updates findings, and signals re-entry to Phase 2 (Dev-Loop).
 3. Fall B: If all 4 reviewers have APPROVED and no BLOCKER / WARNING findings remain:
    - Inspects the auto_merge configuration flag:
      - If auto_merge == True: executes `gh pr merge --auto --squash` or `glab mr merge --auto --squash`.
@@ -54,7 +54,7 @@ class ConsensusCircuitBreakerError(ConsensusError):
 
 
 class ConsensusDecision(BaseModel):
-    """Structured decision outcome of Phase 7 consensus evaluation."""
+    """Structured decision outcome of Phase 5 consensus evaluation."""
 
     status: ConsensusStatus = Field(
         ...,
@@ -318,7 +318,7 @@ async def run_consensus_phase(
     console: Console | None = None,
     input_func: Callable[[str], str] | None = None,
 ) -> ConsensusDecision:
-    """Execute Phase 7: Consensus Evaluation, Feedback Loop & Auto-Merge.
+    """Execute Phase 5: Consensus Evaluation, Feedback Loop & Auto-Merge.
 
     1. Evaluates code review results.
     2. Fall A: If any review is not APPROVED or open BLOCKER / WARNING findings exist:

@@ -1,4 +1,4 @@
-"""Comprehensive tests for Dev Agent Loop Controller (Phase 4)."""
+"""Comprehensive tests for Dev Agent Loop Controller (Phase 2)."""
 
 import asyncio
 from pathlib import Path

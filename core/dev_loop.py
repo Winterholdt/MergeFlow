@@ -1,6 +1,6 @@
 """Developer Agent execution loop controller for MergeFlow orchestrator.
 
-Coordinates Phase 4 of the orchestration workflow:
+Coordinates Phase 2 of the orchestration workflow:
 1. Generates and checks out a feature branch (feat/SPEC-<slug>) via GitHandler.
 2. Injects SPEC.md and repository context/guidelines into the Dev Agent prompt.
 3. Runs the Dev Agent loop where all shell commands are strictly validated by Gatekeeper.
@@ -261,7 +261,7 @@ async def run_dev_phase(
     skill_manager: SkillManager | None = None,
     custom_skills: list[str] | None = None,
 ) -> None:
-    """Execute the Phase 4 Dev-Agent Loop.
+    """Execute the Phase 2 Dev-Agent Loop.
 
     1. Creates and checkouts feature branch `feat/SPEC-<slug>`.
     2. Guides the developer agent through iterative implementation and testing.

@@ -1,6 +1,6 @@
 """Parallel Multi-Persona Code Reviewer for MergeFlow orchestrator.
 
-Coordinates Phase 6 of the orchestration pipeline:
+Coordinates Phase 4 of the orchestration pipeline:
 1. Receives the overall git diff and technical specification (SPEC.md).
 2. Concurrently launches four isolated reviewer agents via asyncio.gather:
    - Functional & Business Logic (prompts/review_functional.md)
@@ -446,7 +446,7 @@ async def run_review_phase(
     skill_manager: SkillManager | None = None,
     custom_skills: list[str] | None = None,
 ) -> ReviewSummary:
-    """Orchestrate Phase 6 multi-persona review and return consolidated summary.
+    """Orchestrate Phase 4 multi-persona review and return consolidated summary.
 
     Args:
         diff: Unified git diff string.

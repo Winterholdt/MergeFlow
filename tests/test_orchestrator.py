@@ -1,4 +1,4 @@
-"""Unit and integration tests for the Central Orchestrator (Phase 1-7)."""
+"""Unit and integration tests for the Central Orchestrator (Phase 1-5)."""
 
 from pathlib import Path
 import subprocess
@@ -227,7 +227,7 @@ async def test_orchestrator_re_review_loop(repo_sandbox: Path, tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_orchestrator_halts_on_ci_failure(repo_sandbox: Path, tmp_path: Path):
-    """When Phase 5 CI loop fails, orchestrator terminates with FAILED status."""
+    """When Phase 3 CI loop fails, orchestrator terminates with FAILED status."""
     state_file = tmp_path / "ci_fail_state.json"
 
     mock_provider = AsyncMock(spec=BaseLLMProvider)
