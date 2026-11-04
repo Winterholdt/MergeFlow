@@ -15,14 +15,25 @@ from core.cli.events import (
     register_agent,
 )
 from core.cli.formatting import format_phase_breadcrumbs
-from core.cli.interactive import run_interactive_session
 from core.cli.logger import setup_cli_logging
+from core.cli.repl import (
+    AgentCLI,
+    print_cli_help_table,
+    run_cli,
+    run_interactive_session,
+    show_agents_table,
+    show_diff_preview,
+    show_spec_preview,
+    show_status_panel,
+)
 from core.cli.ui_handler import TerminalUIEventHandler
 
 __all__ = [
     "print_banner",
     "format_phase_breadcrumbs",
     "run_interactive_session",
+    "run_cli",
+    "AgentCLI",
     "setup_cli_logging",
     "CLIEvent",
     "CLIEventEmitter",
@@ -32,4 +43,9 @@ __all__ = [
     "AgentInfo",
     "AgentRegistry",
     "TerminalUIEventHandler",
+    "show_agents_table",
+    "show_status_panel",
+    "show_spec_preview",
+    "show_diff_preview",
+    "print_cli_help_table",
 ]

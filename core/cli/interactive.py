@@ -11,6 +11,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from core.cli.banner import print_banner
+from core.cli.events import CLIEventEmitter, get_registered_agents
 from core.cli.formatting import format_phase_breadcrumbs
 from core.cli.logger import render_phase_header, setup_cli_logging
 from core.cli.prompter import CLIPrompter
@@ -20,6 +21,7 @@ from core.cli.settings_menu import (
     show_settings_table,
     show_skills_overview,
 )
+from core.cli.ui_handler import TerminalUIEventHandler
 from core.config import AppConfig, load_config
 from core.models import WorkflowPhase, WorkflowState
 from core.orchestrator import run_orchestrator
@@ -110,7 +112,11 @@ async def run_interactive_session(
             # Handle multiline toggle
             elif cmd_lower == "/multiline":
                 prompter.multiline_mode = not prompter.multiline_mode
-                status_txt = "[bold green]aktiviert[/bold green] (ESC+Enter zum Absenden)" if prompter.multiline_mode else "[dim yellow]deaktiviert[/dim yellow]"
+                status_txt = (
+                    "[bold green]aktiviert[/bold green] (ESC+Enter zum Absenden)"
+                    if prompter.multiline_mode
+                    else "[dim yellow]deaktiviert[/dim yellow]"
+                )
                 ui_console.print(f"Mehrzeiliger Modus: {status_txt}")
                 continue
 
@@ -144,12 +150,13 @@ async def run_interactive_session(
                         config.providers.default_provider = new_provider
                         ui_console.print(f"[bold green]✓ Provider geändert auf: {new_provider}[/bold green]")
                     else:
-                        ui_console.print(f"[bold red]Ungültiger Provider '{new_provider}'. Gültig: antigravity, claude, api, cli[/bold red]")
+                        ui_console.print(
+                            f"[bold red]Ungültiger Provider '{new_provider}'. Gültig: antigravity, claude, api, cli[/bold red]"
+                        )
                 continue
 
             # Handle agents overview
             elif cmd_lower in ("/agents", "agents"):
-                from core.cli.events import get_registered_agents
                 agents = get_registered_agents()
                 agents_table = Table(
                     title="[bold magenta]🤖 Registrierte Orchestrator-Agenten & Personas[/bold magenta]",
@@ -251,8 +258,6 @@ async def run_interactive_session(
                 ui_console.print(f"\n[bold cyan]Setze Task '{req_task_id}' fort...[/bold cyan]")
                 setup_cli_logging(console=ui_console, debug=debug)
                 try:
-                    from core.cli.events import CLIEventEmitter
-                    from core.cli.ui_handler import TerminalUIEventHandler
                     emitter = CLIEventEmitter()
                     ui_handler = TerminalUIEventHandler(console=ui_console)
                     emitter.subscribe(ui_handler.handle_event)
@@ -281,8 +286,6 @@ async def run_interactive_session(
             setup_cli_logging(console=ui_console, debug=debug)
 
             try:
-                from core.cli.events import CLIEventEmitter
-                from core.cli.ui_handler import TerminalUIEventHandler
                 emitter = CLIEventEmitter()
                 ui_handler = TerminalUIEventHandler(console=ui_console)
                 emitter.subscribe(ui_handler.handle_event)
@@ -300,7 +303,13 @@ async def run_interactive_session(
                 ui_handler.stop_spinner()
 
                 breadcrumbs = format_phase_breadcrumbs(state.current_phase)
-                commits_cnt = len(getattr(state, "commits_created", state.metadata.get("commits", []) if isinstance(state.metadata, dict) else []))
+                commits_cnt = len(
+                    getattr(
+                        state,
+                        "commits_created",
+                        state.metadata.get("commits", []) if isinstance(state.metadata, dict) else [],
+                    )
+                )
                 if state.current_phase == WorkflowPhase.DONE.value:
                     ui_console.print(
                         Panel(

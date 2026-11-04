@@ -227,7 +227,7 @@ async def test_agent_cli_executes_orchestration():
     fake_state = WorkflowState(task_id="TASK-TEST", raw_requirements="Build feature")
     fake_state.current_phase = WorkflowPhase.DONE.value
 
-    with patch("cli.run_orchestrator", AsyncMock(return_value=fake_state)) as mock_run:
+    with patch("core.cli.repl.run_orchestrator", AsyncMock(return_value=fake_state)) as mock_run:
         await cli.execute_orchestration("Build feature")
         mock_run.assert_called_once()
         # Verify event_emitter was passed

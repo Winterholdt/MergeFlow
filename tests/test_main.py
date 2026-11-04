@@ -31,11 +31,12 @@ def test_build_parser_arguments():
 
 
 @pytest.mark.asyncio
-async def test_async_main_missing_requirements():
-    """Missing requirements returns exit code 1."""
+async def test_async_main_missing_requirements_non_tty():
+    """Missing requirements in non-tty mode returns exit code 1."""
     parser = build_parser()
     args = parser.parse_args([])
-    code = await async_main(args)
+    with patch("sys.stdin.isatty", return_value=False):
+        code = await async_main(args)
     assert code == 1
 
 
@@ -113,28 +114,20 @@ async def test_async_main_unquoted_multi_word_requirements():
 
 
 @pytest.mark.asyncio
-async def test_async_main_interactive_prompt():
-    """When no args given in tty mode, prompt user for input interactively."""
+async def test_async_main_tty_no_args_launches_repl():
+    """When no args are given in tty mode, launches the interactive Agent REPL directly."""
     parser = build_parser()
     args = parser.parse_args([])
 
-    mock_state = WorkflowState(
-        task_id="TASK-INTERACTIVE",
-        raw_requirements="Interactive requirement prompt",
-        current_phase=WorkflowPhase.DONE.value,
-    )
-
     with (
         patch("sys.stdin.isatty", return_value=True),
-        patch("main.console.input", return_value="Interactive requirement prompt"),
-        patch("main.run_orchestrator", new_callable=AsyncMock) as mock_run,
+        patch("main.run_interactive_session", new_callable=AsyncMock) as mock_interactive,
     ):
-        mock_run.return_value = mock_state
+        mock_interactive.return_value = 0
         code = await async_main(args)
 
     assert code == 0
-    mock_run.assert_called_once()
-    assert mock_run.call_args.kwargs["requirements"] == "Interactive requirement prompt"
+    mock_interactive.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -152,19 +145,52 @@ async def test_async_main_interactive_flag():
 
 
 @pytest.mark.asyncio
-async def test_async_main_prompt_slash_command():
-    """Verify that entering a slash command at the prompt launches interactive session."""
+async def test_subcommand_agents():
+    """Verify 'orch agents' prints agents table and exits 0."""
     parser = build_parser()
-    args = parser.parse_args([])
+    args = parser.parse_args(["agents"])
 
-    with (
-        patch("sys.stdin.isatty", return_value=True),
-        patch("main.console.input", return_value="/help"),
-        patch("main.run_interactive_session", new_callable=AsyncMock) as mock_interactive,
-    ):
-        mock_interactive.return_value = 0
+    with patch("main.show_agents_table") as mock_show:
         code = await async_main(args)
 
     assert code == 0
-    mock_interactive.assert_called_once()
+    mock_show.assert_called_once()
 
+
+@pytest.mark.asyncio
+async def test_subcommand_status():
+    """Verify 'orch status' displays status panel and exits 0."""
+    parser = build_parser()
+    args = parser.parse_args(["status"])
+
+    with patch("main.show_status_panel") as mock_status:
+        code = await async_main(args)
+
+    assert code == 0
+    mock_status.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_subcommand_spec():
+    """Verify 'orch spec' displays SPEC.md preview and exits 0."""
+    parser = build_parser()
+    args = parser.parse_args(["spec"])
+
+    with patch("main.show_spec_preview") as mock_spec:
+        code = await async_main(args)
+
+    assert code == 0
+    mock_spec.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_subcommand_diff():
+    """Verify 'orch diff' displays git diff and exits 0."""
+    parser = build_parser()
+    args = parser.parse_args(["diff"])
+
+    with patch("main.show_diff_preview", new_callable=AsyncMock) as mock_diff:
+        code = await async_main(args)
+
+    assert code == 0
+    mock_diff.assert_called_once()
