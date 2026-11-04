@@ -21,13 +21,14 @@ dependencies = [
 mergeflow = "main:main"
 orch = "main:main"
 ai-orch = "main:main"
+agent-cli = "cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["core*", "vcs*", "security*"]
 
 [tool.setuptools]
-py-modules = ["main"]
+py-modules = ["main", "cli", "cli_events"]
 
 [project.optional-dependencies]
 dev = [

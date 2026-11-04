@@ -11,6 +11,7 @@ from prompt_toolkit.styles import Style
 from rich.console import Console
 
 SLASH_COMMANDS = {
+    "/agents": None,
     "/help": None,
     "/?": None,
     "/config": {

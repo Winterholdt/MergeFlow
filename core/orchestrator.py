@@ -45,6 +45,14 @@ from vcs.ci_watcher import CIWatcher
 from vcs.git_handler import GitHandler
 from vcs.remote_vcs import RemoteVCS
 
+try:
+    from core.cli.events import CLIEventEmitter
+except ImportError:
+    try:
+        from cli_events import CLIEventEmitter
+    except ImportError:
+        CLIEventEmitter = None  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 
@@ -84,6 +92,7 @@ class Orchestrator:
         input_func: Callable[[str], str] | None = None,
         auto_merge: bool | None = None,
         skill_manager: SkillManager | None = None,
+        event_emitter: Any | None = None,
     ) -> None:
         """Initialize the Orchestrator.
 
@@ -99,12 +108,15 @@ class Orchestrator:
             console: Optional Rich Console for UI outputs.
             input_func: Optional input function for mock testing terminal prompts.
             auto_merge: Optional explicit override for auto_merge flag.
+            skill_manager: Optional SkillManager instance.
+            event_emitter: Optional CLIEventEmitter instance for real-time status and telemetry.
         """
         self.repo_path = Path(repo_path).resolve()
         self.state_path = Path(state_path).resolve()
         self.console = console or Console()
         self.input_func = input_func
         self.auto_merge_override = auto_merge
+        self.event_emitter = event_emitter
 
         # Load or use configuration
         self.config = config or load_config()
@@ -186,8 +198,16 @@ class Orchestrator:
         )
         self.save_state()
 
+        if self.event_emitter:
+            self.event_emitter.emit_routing(
+                f"Analyzing requirements for Task {self.state.task_id}...",
+                target_agent="DiscoveryAgent" if not self.state.spec_markdown else "DevAgent",
+            )
+
         if resume_phase == WorkflowPhase.DONE:
             self.console.print("[bold green]Workflow ist bereits abgeschlossen (DONE).[/bold green]")
+            if self.event_emitter:
+                self.event_emitter.emit_done("Workflow already in DONE state.", state=self.state)
             return self.state
 
         # =====================================================================
@@ -197,6 +217,12 @@ class Orchestrator:
             logger.info("Starting Phase 1: Requirements Discovery & Spec Generation...")
             self.state.transition_to(WorkflowPhase.SPEC_DISCOVERY)
             self.save_state()
+            if self.event_emitter:
+                self.event_emitter.emit_agent_start(
+                    "DiscoveryAgent",
+                    role="Requirements Architect",
+                    message="Analyzing task requirements and drafting technical specification...",
+                )
 
             try:
                 spec_markdown = await _safe_call(
@@ -210,16 +236,25 @@ class Orchestrator:
                 )
                 self.state.spec_markdown = spec_markdown
                 self.save_state()
+                if self.event_emitter:
+                    self.event_emitter.emit_agent_end(
+                        "DiscoveryAgent",
+                        message="Phase 1 complete: SPEC.md created and approved.",
+                    )
                 logger.info("Phase 1 complete. SPEC.md created and approved.")
             except DiscoveryCancelledError:
                 logger.warning("Discovery phase was cancelled by user.")
                 self.state.transition_to(WorkflowPhase.FAILED)
                 self.save_state()
+                if self.event_emitter:
+                    self.event_emitter.emit_error("Discovery phase cancelled by user.")
                 raise
             except Exception as exc:
                 logger.error("Error in Phase 1 Discovery: %s", exc)
                 self.state.transition_to(WorkflowPhase.FAILED)
                 self.save_state()
+                if self.event_emitter:
+                    self.event_emitter.emit_error(exc, message=f"Phase 1 Discovery failed: {exc}")
                 raise OrchestratorError(f"Phase 1 Discovery failed: {exc}") from exc
         else:
             logger.info("Existing SPEC.md found or resuming later phase. Skipping Phase 1 Discovery.")
@@ -242,6 +277,12 @@ class Orchestrator:
                 )
                 self.state.transition_to(WorkflowPhase.CODING)
                 self.save_state()
+                if self.event_emitter:
+                    self.event_emitter.emit_agent_start(
+                        "DevAgent",
+                        role="Autonomous Developer",
+                        message=f"Starting dev loop on branch '{self.state.branch_name or 'new'}' (iteration {self.state.review_retry_count})...",
+                    )
 
                 try:
                     await _safe_call(
@@ -256,11 +297,15 @@ class Orchestrator:
                         skill_manager=self.skill_manager,
                     )
                     self.save_state()
+                    if self.event_emitter:
+                        self.event_emitter.emit_agent_end("DevAgent", message="Phase 2 Dev-Loop finished.")
                     logger.info("Phase 2 Dev-Loop finished. Transitioned to CI_LOOP.")
                 except Exception as exc:
                     logger.error("Phase 2 Dev-Loop failed: %s", exc)
                     self.state.transition_to(WorkflowPhase.FAILED)
                     self.save_state()
+                    if self.event_emitter:
+                        self.event_emitter.emit_error(exc, message=f"Phase 2 Dev-Loop failed: {exc}")
                     raise OrchestratorError(f"Phase 2 Dev-Loop failed: {exc}") from exc
             else:
                 logger.info("Resuming: Skipping Phase 2 Dev-Loop to resume at %s.", skip_to_phase.value)
@@ -272,6 +317,12 @@ class Orchestrator:
                 logger.info("Starting Phase 3: Self-Healing CI Loop...")
                 self.state.transition_to(WorkflowPhase.CI_LOOP)
                 self.save_state()
+                if self.event_emitter:
+                    self.event_emitter.emit_agent_start(
+                        "CIHealingAgent",
+                        role="CI / Reliability Engineer",
+                        message="Watching CI checks and running self-healing diagnostic loop...",
+                    )
 
                 try:
                     ci_passed = await _safe_call(
@@ -288,17 +339,26 @@ class Orchestrator:
                         input_func=self.input_func,
                     )
                     self.save_state()
+                    if self.event_emitter:
+                        self.event_emitter.emit_agent_end(
+                            "CIHealingAgent",
+                            message="CI verification completed (passed: %s)." % ci_passed,
+                        )
 
                     if not ci_passed:
                         logger.error("Phase 3 CI loop failed or circuit breaker triggered.")
                         if self.state.current_phase != WorkflowPhase.HUMAN_INTERVENTION_REQUIRED.value:
                             self.state.transition_to(WorkflowPhase.FAILED)
                         self.save_state()
+                        if self.event_emitter:
+                            self.event_emitter.emit_error("CI pipeline failed or circuit breaker triggered.")
                         return self.state
                 except Exception as exc:
                     logger.error("Phase 3 CI Healing encountered fatal error: %s", exc)
                     self.state.transition_to(WorkflowPhase.FAILED)
                     self.save_state()
+                    if self.event_emitter:
+                        self.event_emitter.emit_error(exc, message=f"Phase 3 CI Healing failed: {exc}")
                     raise OrchestratorError(f"Phase 3 CI Healing failed: {exc}") from exc
             else:
                 logger.info("Resuming: Skipping Phase 3 CI Loop to resume at %s.", skip_to_phase.value)
@@ -310,6 +370,12 @@ class Orchestrator:
                 logger.info("Starting Phase 4: Parallel Multi-Persona Code Review...")
                 self.state.transition_to(WorkflowPhase.REVIEW)
                 self.save_state()
+                if self.event_emitter:
+                    self.event_emitter.emit_agent_start(
+                        "ReviewerAgent",
+                        role="Multi-Persona Reviewer",
+                        message="Conducting parallel code reviews across 4 personas...",
+                    )
 
                 try:
                     diff = await self.git.get_diff(
@@ -324,6 +390,11 @@ class Orchestrator:
                         skill_manager=self.skill_manager,
                     )
                     self.save_state()
+                    if self.event_emitter:
+                        self.event_emitter.emit_agent_end(
+                            "ReviewerAgent",
+                            message=f"Review completed (approved: {review_summary.all_approved}, blockers: {len(review_summary.blockers)}).",
+                        )
                     logger.info(
                         "Phase 4 Review completed. All approved=%s, Blockers=%d, Warnings=%d",
                         review_summary.all_approved,
@@ -334,6 +405,8 @@ class Orchestrator:
                     logger.error("Phase 4 Code Review failed: %s", exc)
                     self.state.transition_to(WorkflowPhase.FAILED)
                     self.save_state()
+                    if self.event_emitter:
+                        self.event_emitter.emit_error(exc, message=f"Phase 4 Code Review failed: {exc}")
                     raise OrchestratorError(f"Phase 4 Code Review failed: {exc}") from exc
             else:
                 logger.info("Resuming: Skipping Phase 4 Code Review to resume at %s.", skip_to_phase.value)
@@ -351,6 +424,12 @@ class Orchestrator:
             logger.info("Starting Phase 5: Consensus Evaluation & Auto-Merge...")
             self.state.transition_to(WorkflowPhase.CONSENSUS)
             self.save_state()
+            if self.event_emitter:
+                self.event_emitter.emit_agent_start(
+                    "ConsensusAgent",
+                    role="Release Manager",
+                    message="Evaluating review consensus and PR merge readiness...",
+                )
 
             try:
                 decision = await run_consensus_phase(
@@ -364,11 +443,21 @@ class Orchestrator:
                     input_func=self.input_func,
                 )
                 self.save_state()
+                if self.event_emitter:
+                    self.event_emitter.emit_agent_end(
+                        "ConsensusAgent",
+                        message=f"Consensus decision: {decision.status.value}",
+                    )
 
                 if decision.status == ConsensusStatus.APPROVED:
                     logger.info("Consensus reached! Workflow completed successfully.")
                     self.state.transition_to(WorkflowPhase.DONE)
                     self.save_state()
+                    if self.event_emitter:
+                        self.event_emitter.emit_done(
+                            message="Consensus reached! Workflow completed successfully.",
+                            state=self.state,
+                        )
                     break
 
                 elif decision.status == ConsensusStatus.NEEDS_REVISION:
@@ -387,12 +476,16 @@ class Orchestrator:
                     if self.state.current_phase != WorkflowPhase.HUMAN_INTERVENTION_REQUIRED.value:
                         self.state.transition_to(WorkflowPhase.FAILED)
                     self.save_state()
+                    if self.event_emitter:
+                        self.event_emitter.emit_error("Consensus rejected or circuit breaker reached.")
                     break
 
             except Exception as exc:
                 logger.error("Phase 5 Consensus encountered error: %s", exc)
                 self.state.transition_to(WorkflowPhase.FAILED)
                 self.save_state()
+                if self.event_emitter:
+                    self.event_emitter.emit_error(exc, message=f"Phase 5 Consensus failed: {exc}")
                 raise OrchestratorError(f"Phase 5 Consensus failed: {exc}") from exc
 
         self.save_state()
@@ -411,6 +504,7 @@ async def run_orchestrator(
     skill_manager: SkillManager | None = None,
     task_id: str | None = None,
     resume_from_state: bool = False,
+    event_emitter: Any | None = None,
 ) -> WorkflowState:
     """Convenience helper to initialize and run the Orchestrator.
 
@@ -426,6 +520,7 @@ async def run_orchestrator(
         skill_manager: Optional SkillManager instance.
         task_id: Optional unique task identifier.
         resume_from_state: Whether to resume from persisted state.
+        event_emitter: Optional CLIEventEmitter instance.
 
     Returns:
         Final WorkflowState instance.
@@ -444,6 +539,7 @@ async def run_orchestrator(
         input_func=input_func,
         auto_merge=auto_merge,
         skill_manager=skill_manager,
+        event_emitter=event_emitter,
     )
     return await orchestrator.run(
         requirements=requirements,

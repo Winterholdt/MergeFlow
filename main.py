@@ -11,11 +11,17 @@ Loads configuration, initializes state, executes Phases 1 to 5 sequentially,
 and persists workflow state after every phase.
 """
 
+from pathlib import Path
+import sys
+
+# Ensure project root is in sys.path when invoked via entrypoint script
+_project_root = str(Path(__file__).resolve().parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 import argparse
 import asyncio
 import logging
-from pathlib import Path
-import sys
 
 from rich.console import Console
 from rich.panel import Panel

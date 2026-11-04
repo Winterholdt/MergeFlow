@@ -39,6 +39,7 @@ def print_help_table(console: Console) -> None:
     table.add_column("Beschreibung", style="white", width=55)
 
     table.add_row("<Anforderung>", "Startet den vollständigen 5-Phasen-Workflow für die eingegebene Aufgabe")
+    table.add_row("/agents", "Zeigt alle registrierten Agenten, Personas, Phasen & Skills an")
     table.add_row("/config, /settings", "Interaktives Einstellungsmenü (Provider, Auto-Merge, Retries)")
     table.add_row("/provider [name]", "Zeigt oder wechselt den aktiven LLM-Provider (antigravity, claude, api, cli)")
     table.add_row("/skills", "Zeigt alle aktiven Domain-Skills sortiert nach Pipeline-Phasen")
@@ -146,6 +147,34 @@ async def run_interactive_session(
                         ui_console.print(f"[bold red]Ungültiger Provider '{new_provider}'. Gültig: antigravity, claude, api, cli[/bold red]")
                 continue
 
+            # Handle agents overview
+            elif cmd_lower in ("/agents", "agents"):
+                from core.cli.events import get_registered_agents
+                agents = get_registered_agents()
+                agents_table = Table(
+                    title="[bold magenta]🤖 Registrierte Orchestrator-Agenten & Personas[/bold magenta]",
+                    border_style="magenta",
+                    header_style="bold cyan",
+                    expand=True,
+                )
+                agents_table.add_column("Agent / Persona", style="bold cyan", no_wrap=True, width=24)
+                agents_table.add_column("Phase", style="bold yellow", width=18)
+                agents_table.add_column("Rolle", style="green", width=26)
+                agents_table.add_column("Beschreibung & Fähigkeiten", style="white")
+
+                for ag in agents:
+                    skills_badge = ""
+                    if ag.skills:
+                        skills_badge = "\n" + " ".join(f"[dim cyan][{s}][/dim cyan]" for s in ag.skills)
+                    agents_table.add_row(
+                        f"{ag.icon} {ag.name}",
+                        ag.phase,
+                        ag.role,
+                        f"{ag.description}{skills_badge}",
+                    )
+                ui_console.print(agents_table)
+                continue
+
             # Handle skills overview
             elif cmd_lower in ("/skills", "skills"):
                 show_skills_overview(skill_manager, ui_console)
@@ -222,6 +251,12 @@ async def run_interactive_session(
                 ui_console.print(f"\n[bold cyan]Setze Task '{req_task_id}' fort...[/bold cyan]")
                 setup_cli_logging(console=ui_console, debug=debug)
                 try:
+                    from core.cli.events import CLIEventEmitter
+                    from core.cli.ui_handler import TerminalUIEventHandler
+                    emitter = CLIEventEmitter()
+                    ui_handler = TerminalUIEventHandler(console=ui_console)
+                    emitter.subscribe(ui_handler.handle_event)
+                    ui_handler.start_spinner(f"[cyan]Setze Task '{req_task_id}' fort...[/cyan]")
                     await run_orchestrator(
                         requirements="",
                         config_path=config_path,
@@ -230,7 +265,9 @@ async def run_interactive_session(
                         console=ui_console,
                         task_id=req_task_id,
                         resume_from_state=True,
+                        event_emitter=emitter,
                     )
+                    ui_handler.stop_spinner()
                 except Exception as exc:
                     ui_console.print(f"[bold red]Fehler beim Fortsetzen:[/bold red] {exc}")
                 continue
@@ -244,6 +281,12 @@ async def run_interactive_session(
             setup_cli_logging(console=ui_console, debug=debug)
 
             try:
+                from core.cli.events import CLIEventEmitter
+                from core.cli.ui_handler import TerminalUIEventHandler
+                emitter = CLIEventEmitter()
+                ui_handler = TerminalUIEventHandler(console=ui_console)
+                emitter.subscribe(ui_handler.handle_event)
+                ui_handler.start_spinner("[cyan]Starte Autonomous Multi-Agent Pipeline...[/cyan]")
                 state = await run_orchestrator(
                     requirements=prompt_text,
                     config_path=config_path,
@@ -252,16 +295,19 @@ async def run_interactive_session(
                     console=ui_console,
                     auto_merge=config.workflow.auto_merge,
                     provider_type=config.providers.default_provider,
+                    event_emitter=emitter,
                 )
+                ui_handler.stop_spinner()
 
                 breadcrumbs = format_phase_breadcrumbs(state.current_phase)
+                commits_cnt = len(getattr(state, "commits_created", state.metadata.get("commits", []) if isinstance(state.metadata, dict) else []))
                 if state.current_phase == WorkflowPhase.DONE.value:
                     ui_console.print(
                         Panel(
                             f"[bold green]✓ Alle Phasen erfolgreich abgeschlossen![/bold green]\n\n"
                             f"Pipeline: {breadcrumbs}\n"
                             f"Branch: [bold yellow]{state.branch_name}[/bold yellow]\n"
-                            f"Commits: {len(state.commits_created)}\n"
+                            f"Commits: {commits_cnt}\n"
                             f"Persistiert in: [dim]{state_path}[/dim]",
                             title="[bold green]Workflow Erfolgreich[/bold green]",
                             border_style="green",
