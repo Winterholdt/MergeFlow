@@ -250,6 +250,11 @@ async def test_agent_cli_executes_orchestration():
         assert "input_func" in kwargs
         assert callable(kwargs["input_func"])
 
+        with patch("rich.prompt.Prompt.ask", return_value="user answer") as mock_ask:
+            answer = kwargs["input_func"]("Antwort zu Frage 1")
+            assert answer == "user answer"
+            mock_ask.assert_called_once_with("Antwort zu Frage 1", console=cli.console)
+
     out = console.export_text()
     assert "Workflow Erfolgreich" in out
     assert "TASK-TEST" in out
