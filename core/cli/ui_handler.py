@@ -63,10 +63,10 @@ class TerminalUIEventHandler:
                 self.console.print(text)
 
         elif etype == EventType.AGENT_END.value:
+            self.stop_spinner()
             agent = event.agent_name or self._active_agent or "Agent"
             msg = event.message or "Arbeit abgeschlossen."
-            if self._status:
-                self._status.update(f"[dim green]✓ [{agent}] {msg}[/dim green]")
+            self.console.print(f"[dim green]✓ [{agent}] {msg}[/dim green]")
 
         elif etype == EventType.TOOL_START.value:
             tool = event.tool_name or "Tool"
@@ -93,6 +93,9 @@ class TerminalUIEventHandler:
                 self._status.update(f"[cyan]ℹ {msg}[/cyan]")
             else:
                 self.console.print(f"[cyan]ℹ {msg}[/cyan]")
+
+        elif etype in (EventType.USER_PROMPT_START.value, "user_prompt_start"):
+            self.stop_spinner()
 
         elif etype == EventType.DONE.value:
             self.stop_spinner()

@@ -40,6 +40,7 @@ import logging
 
 from rich.console import Console
 from rich.panel import Panel
+from rich.prompt import Prompt
 
 from core.cli.events import CLIEventEmitter
 from core.cli.formatting import format_phase_breadcrumbs
@@ -376,6 +377,18 @@ async def async_main(args: argparse.Namespace) -> int:
     emitter = CLIEventEmitter()
     ui_handler = TerminalUIEventHandler(console=console)
     emitter.subscribe(ui_handler.handle_event)
+
+    def cli_input_func(prompt_label: str) -> str:
+        ui_handler.stop_spinner()
+        if hasattr(console, "_live_stack") and console._live_stack:
+            for live in list(console._live_stack):
+                try:
+                    live.stop()
+                except Exception:
+                    pass
+            console._live_stack.clear()
+        return Prompt.ask(prompt_label, console=console)
+
     ui_handler.start_spinner("[cyan]Starte Autonomous Multi-Agent Pipeline...[/cyan]")
 
     try:
@@ -390,6 +403,7 @@ async def async_main(args: argparse.Namespace) -> int:
             task_id=task_id_for_run,
             resume_from_state=resume_mode,
             event_emitter=emitter,
+            input_func=cli_input_func,
         )
         ui_handler.stop_spinner()
 

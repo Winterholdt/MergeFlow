@@ -255,6 +255,87 @@ class GitHandler:
 
         return (returncode, stdout, stderr)
 
+    async def is_repo(self) -> bool:
+        """Check whether repo_path is inside a valid git repository.
+
+        Returns:
+            True if repo_path is a git repository, False otherwise.
+        """
+        if not self.repo_path.exists() or not self.repo_path.is_dir():
+            return False
+        try:
+            code, stdout, _ = await self._run_git(
+                "rev-parse",
+                "--is-inside-work-tree",
+                check=False,
+            )
+            return code == 0 and stdout.strip().lower() == "true"
+        except Exception:
+            return False
+
+    async def init_repo(
+        self,
+        default_branch: str = "main",
+        initial_commit: bool = True,
+    ) -> None:
+        """Initialize a new git repository in repo_path.
+
+        Args:
+            default_branch: Default branch name (standard: 'main').
+            initial_commit: Whether to create an initial commit if the repository has no commits.
+        """
+        self.repo_path.mkdir(parents=True, exist_ok=True)
+
+        # 1. Initialize git with default branch
+        code, _, _ = await self._run_git("init", "-b", default_branch, check=False)
+        if code != 0:
+            await self._run_git("init")
+            code_br, _, _ = await self._run_git("branch", "-m", default_branch, check=False)
+            if code_br != 0:
+                await self._run_git("checkout", "-b", default_branch, check=False)
+
+        # 2. Configure git user identity locally if not configured globally
+        code_user, stdout_user, _ = await self._run_git("config", "user.name", check=False)
+        if code_user != 0 or not stdout_user.strip():
+            await self._run_git("config", "user.name", "MergeFlow Agent", check=False)
+
+        code_email, stdout_email, _ = await self._run_git("config", "user.email", check=False)
+        if code_email != 0 or not stdout_email.strip():
+            await self._run_git("config", "user.email", "agent@mergeflow.ai", check=False)
+
+        # 3. Create initial commit if requested and no commits exist yet
+        if initial_commit:
+            code_head, _, _ = await self._run_git("rev-parse", "HEAD", check=False)
+            if code_head != 0:
+                await self._run_git("add", "-A", check=False)
+                code_c, _, _ = await self._run_git(
+                    "commit", "-m", "chore: initial commit", check=False
+                )
+                if code_c != 0:
+                    await self._run_git(
+                        "commit", "--allow-empty", "-m", "chore: initial commit", check=False
+                    )
+
+    async def ensure_repo(
+        self,
+        default_branch: str = "main",
+        initial_commit: bool = True,
+    ) -> bool:
+        """Ensure repo_path is a git repository, initializing it if not.
+
+        Args:
+            default_branch: Default branch name if initialization is needed.
+            initial_commit: Whether to create an initial commit if initialized.
+
+        Returns:
+            True if repository was newly initialized, False if it was already a git repo.
+        """
+        if not await self.is_repo():
+            logger.info("Directory '%s' is not a git repository. Initializing...", self.repo_path)
+            await self.init_repo(default_branch=default_branch, initial_commit=initial_commit)
+            return True
+        return False
+
     async def get_current_branch(self) -> str:
         """Get the name of the currently checked out branch.
 
@@ -268,8 +349,8 @@ class GitHandler:
             return branch
 
         # Fallback to git rev-parse --abbrev-ref HEAD
-        code, stdout, _ = await self._run_git("rev-parse", "--abbrev-ref", "HEAD")
-        return stdout.strip()
+        code, stdout, _ = await self._run_git("rev-parse", "--abbrev-ref", "HEAD", check=False)
+        return stdout.strip() if (code == 0 and stdout.strip()) else "main"
 
     async def branch_exists(self, branch_name: str) -> bool:
         """Check if a branch exists locally in the repository.
@@ -292,6 +373,7 @@ class GitHandler:
     async def create_feature_branch(self, slug: str, base_branch: str = "main") -> str:
         """Create and checkout a feature branch named feat/SPEC-<slug>.
 
+        If the repository is not yet initialized with git, it initializes it automatically.
         If the branch already exists, it checks out the existing branch.
 
         Args:
@@ -301,6 +383,8 @@ class GitHandler:
         Returns:
             The created or checked out branch name.
         """
+        await self.ensure_repo(default_branch=base_branch)
+
         raw_slug = slug.strip()
 
         # Build consistent branch name
@@ -313,13 +397,25 @@ class GitHandler:
         else:
             branch_name = f"feat/SPEC-{sanitize_slug(raw_slug)}"
 
-        exists = await self.branch_exists(branch_name)
-        if exists:
-            logger.info("Branch '%s' already exists. Checking it out.", branch_name)
-            await self._run_git("checkout", branch_name)
-        else:
-            logger.info("Creating and checking out feature branch '%s'.", branch_name)
-            await self._run_git("checkout", "-b", branch_name)
+        try:
+            exists = await self.branch_exists(branch_name)
+            if exists:
+                logger.info("Branch '%s' already exists. Checking it out.", branch_name)
+                await self._run_git("checkout", branch_name)
+            else:
+                logger.info("Creating and checking out feature branch '%s'.", branch_name)
+                await self._run_git("checkout", "-b", branch_name)
+        except GitCommandError as exc:
+            err_msg = (exc.stderr or exc.stdout or str(exc)).lower()
+            if "not a git repository" in err_msg:
+                logger.warning(
+                    "Git repository was missing in '%s' during branch creation. Initializing repository...",
+                    self.repo_path,
+                )
+                await self.init_repo(default_branch=base_branch, initial_commit=True)
+                await self._run_git("checkout", "-b", branch_name)
+            else:
+                raise
 
         return branch_name
 
@@ -658,3 +754,29 @@ async def get_recent_commits(
     """Get recent commit summaries."""
     handler = GitHandler(repo_path=repo_path)
     return await handler.get_recent_commits(count=count)
+
+
+async def is_repo(repo_path: Path | str = ".") -> bool:
+    """Check if repo_path is inside a git repository."""
+    handler = GitHandler(repo_path=repo_path)
+    return await handler.is_repo()
+
+
+async def init_repo(
+    default_branch: str = "main",
+    repo_path: Path | str = ".",
+    initial_commit: bool = True,
+) -> None:
+    """Initialize a new git repository in repo_path."""
+    handler = GitHandler(repo_path=repo_path)
+    await handler.init_repo(default_branch=default_branch, initial_commit=initial_commit)
+
+
+async def ensure_repo(
+    default_branch: str = "main",
+    repo_path: Path | str = ".",
+    initial_commit: bool = True,
+) -> bool:
+    """Ensure repo_path is a git repository, initializing it if not."""
+    handler = GitHandler(repo_path=repo_path)
+    return await handler.ensure_repo(default_branch=default_branch, initial_commit=initial_commit)

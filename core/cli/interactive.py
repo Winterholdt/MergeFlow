@@ -8,6 +8,7 @@ from typing import Any
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.prompt import Prompt
 from rich.table import Table
 
 from core.cli.banner import print_banner
@@ -232,6 +233,9 @@ async def run_interactive_session(
 
             # Handle diff view
             elif cmd_lower in ("/diff", "diff"):
+                if not await git_handler.is_repo():
+                    ui_console.print("[dim]Kein Git-Repository vorhanden.[/dim]")
+                    continue
                 diff_text = await git_handler.get_diff(target_branch=config.workflow.default_branch)
                 if diff_text.strip():
                     ui_console.print(
@@ -289,6 +293,18 @@ async def run_interactive_session(
                 emitter = CLIEventEmitter()
                 ui_handler = TerminalUIEventHandler(console=ui_console)
                 emitter.subscribe(ui_handler.handle_event)
+
+                def interactive_input_func(prompt_label: str) -> str:
+                    ui_handler.stop_spinner()
+                    if hasattr(ui_console, "_live_stack") and ui_console._live_stack:
+                        for live in list(ui_console._live_stack):
+                            try:
+                                live.stop()
+                            except Exception:
+                                pass
+                        ui_console._live_stack.clear()
+                    return Prompt.ask(prompt_label, console=ui_console)
+
                 ui_handler.start_spinner("[cyan]Starte Autonomous Multi-Agent Pipeline...[/cyan]")
                 state = await run_orchestrator(
                     requirements=prompt_text,
@@ -299,6 +315,7 @@ async def run_interactive_session(
                     auto_merge=config.workflow.auto_merge,
                     provider_type=config.providers.default_provider,
                     event_emitter=emitter,
+                    input_func=interactive_input_func,
                 )
                 ui_handler.stop_spinner()
 

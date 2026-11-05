@@ -10,9 +10,12 @@ from vcs.git_handler import (
     commit_changes,
     create_feature_branch,
     ensure_conventional_commit,
+    ensure_repo,
     get_diff,
     get_recent_commits,
+    init_repo,
     is_conventional_commit,
+    is_repo,
     push_branch,
 )
 from vcs.ci_watcher import (
@@ -38,6 +41,9 @@ __all__ = [
     "GitCommandError",
     "GitHandler",
     "create_feature_branch",
+    "is_repo",
+    "init_repo",
+    "ensure_repo",
     "get_diff",
     "commit_changes",
     "push_branch",

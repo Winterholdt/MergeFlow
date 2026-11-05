@@ -150,6 +150,13 @@ def test_emitter_convenience_methods():
     ev_stat = emitter.emit_status("Waiting on CI")
     assert ev_stat.event_type == EventType.STATUS
 
+    ev_prompt_s = emitter.emit_prompt_start("Waiting for input", prompt_label="Antwort:")
+    assert ev_prompt_s.event_type == EventType.USER_PROMPT_START
+    assert ev_prompt_s.content == "Antwort:"
+
+    ev_prompt_e = emitter.emit_prompt_end("Input received")
+    assert ev_prompt_e.event_type == EventType.USER_PROMPT_END
+
     ev_done = emitter.emit_done("All set", content="# Report")
     assert ev_done.event_type == EventType.DONE
     assert ev_done.content == "# Report"
@@ -158,7 +165,7 @@ def test_emitter_convenience_methods():
     assert ev_err.event_type == EventType.ERROR
     assert "Failed action" in ev_err.content
 
-    assert len(emitted) == 9
+    assert len(emitted) == 11
 
 
 def test_agent_registry_defaults():

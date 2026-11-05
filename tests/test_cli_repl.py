@@ -80,6 +80,18 @@ def test_ui_event_handler_rendering():
         )
     )
 
+    # Prompt event stops spinner
+    handler.handle_event(
+        CLIEvent(
+            event_type=EventType.USER_PROMPT_START,
+            message="Waiting for user input...",
+        )
+    )
+    assert handler._status is None
+
+    # Resume spinner for next test
+    handler.start_spinner("Testing done...")
+
     # Done event stops spinner and renders message
     handler.handle_event(
         CLIEvent(
@@ -178,8 +190,9 @@ async def test_agent_cli_slash_spec_and_diff(tmp_path: Path):
     assert "Test Spec Markdown" in out
 
     # Diff
-    with patch.object(cli.git_handler, "get_diff", AsyncMock(return_value="diff --git a/test b/test")):
-        await cli.handle_slash_command("/diff")
+    with patch.object(cli.git_handler, "is_repo", AsyncMock(return_value=True)):
+        with patch.object(cli.git_handler, "get_diff", AsyncMock(return_value="diff --git a/test b/test")):
+            await cli.handle_slash_command("/diff")
     out_diff = console.export_text()
     assert "diff --git" in out_diff
 
@@ -234,6 +247,8 @@ async def test_agent_cli_executes_orchestration():
         _, kwargs = mock_run.call_args
         assert "event_emitter" in kwargs
         assert isinstance(kwargs["event_emitter"], CLIEventEmitter)
+        assert "input_func" in kwargs
+        assert callable(kwargs["input_func"])
 
     out = console.export_text()
     assert "Workflow Erfolgreich" in out

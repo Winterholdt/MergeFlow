@@ -14,12 +14,14 @@ Coordinates autonomous pipeline monitoring and self-healing remediation:
    - Records diagnostics and alerts the user to prevent runaway loops.
 """
 
+from __future__ import annotations
+
 import asyncio
 from collections.abc import Callable
 import logging
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from rich.console import Console
 from rich.panel import Panel
@@ -31,13 +33,29 @@ from core.provider import BaseLLMProvider
 from core.skills import SkillManager
 from security.gatekeeper import Gatekeeper
 from security.shell_runner import ShellRunner
-from vcs.ci_watcher import CIWatcher, PipelineResult
 from vcs.git_handler import GitHandler
 from vcs.remote_vcs import RemoteVCS
+
+if TYPE_CHECKING:
+    from vcs.ci_watcher import CIWatcher, PipelineResult
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CI_HEALING_PROMPT_PATH = Path("prompts/ci_healing.md")
+
+
+def _stop_active_spinners(console: Console) -> None:
+    """Ensure any active Rich live displays / status spinners on the console are stopped."""
+    try:
+        if hasattr(console, "_live_stack") and console._live_stack:
+            for live in list(console._live_stack):
+                try:
+                    live.stop()
+                except Exception:
+                    pass
+            console._live_stack.clear()
+    except Exception:
+        pass
 
 
 class CIHealingError(Exception):
@@ -263,7 +281,11 @@ async def run_ci_healing_loop(
     active_gatekeeper = gatekeeper or Gatekeeper(repo_root=repo_root)
     active_git = git_handler or GitHandler(repo_path=repo_root)
     active_vcs = remote_vcs or RemoteVCS(repo_path=repo_root)
-    active_watcher = ci_watcher or CIWatcher(remote_vcs=active_vcs, repo_path=repo_root)
+    if ci_watcher is None:
+        from vcs.ci_watcher import CIWatcher
+        active_watcher = CIWatcher(remote_vcs=active_vcs, repo_path=repo_root)
+    else:
+        active_watcher = ci_watcher
     shell_runner = ShellRunner(gatekeeper=active_gatekeeper, repo_root=repo_root)
     ui_console = console or Console()
 
@@ -350,6 +372,7 @@ async def run_ci_healing_loop(
                 )
             )
 
+            _stop_active_spinners(ui_console)
             prompt_text = "[M]anuell übernehmen / [F]orce Merge versuchen / [A]bbruch: "
             if input_func is not None:
                 user_choice = input_func(prompt_text).strip().lower()

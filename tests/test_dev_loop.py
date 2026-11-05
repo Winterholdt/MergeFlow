@@ -230,3 +230,54 @@ async def test_run_dev_phase_gatekeeper_blocks_forbidden_file_write(repo_sandbox
 
     # Verify .env was NOT created
     assert not (repo_sandbox / ".env").exists()
+
+
+@pytest.mark.asyncio
+async def test_run_dev_phase_without_preexisting_git_repo(tmp_path: Path):
+    """Verify Dev Loop auto-initializes git when repo has no .git directory."""
+    raw_dir = tmp_path / "factory_logistics_tycoon"
+    raw_dir.mkdir()
+
+    spec = """# SPEC: Project Workspace Initialization for Factory Logistics Tycoon
+## 1. Overview
+Initialize workspace structure.
+"""
+    state = WorkflowState(
+        task_id="INIT-001",
+        raw_requirements="Initialize project workspace for factory logistics tycoon.",
+    )
+    gatekeeper = Gatekeeper(repo_root=raw_dir)
+    git = GitHandler(repo_path=raw_dir)
+
+    mock_provider = AsyncMock(spec=BaseLLMProvider)
+    mock_provider.complete.side_effect = [
+        DevAgentStep(
+            thought="Write README for factory logistics tycoon.",
+            action_type=DevActionType.WRITE_FILE,
+            file_path="README.md",
+            file_content="# Factory Logistics Tycoon\n",
+        ),
+        DevAgentStep(
+            thought="Workspace initialized.",
+            action_type=DevActionType.COMPLETE,
+            tests_passed=True,
+        ),
+    ]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(git, "push_branch", AsyncMock(return_value="OK"))
+
+        await run_dev_phase(
+            spec=spec,
+            state=state,
+            gatekeeper=gatekeeper,
+            provider=mock_provider,
+            git_handler=git,
+            remote_vcs=RemoteVCS(repo_path=raw_dir, runner=AsyncMock(return_value=(0, "http://pr", ""))),
+            max_iterations=2,
+        )
+
+    assert state.current_phase == WorkflowPhase.CI_LOOP
+    assert state.branch_name == "feat/SPEC-project-workspace-initialization-for-factory-logistics-tycoon"
+    assert (raw_dir / "README.md").exists()
+    assert (raw_dir / ".git").is_dir()

@@ -60,7 +60,7 @@ from core.cli.ui_handler import TerminalUIEventHandler
 from core.config import AppConfig, load_config
 from core.discovery import DiscoveryCancelledError
 from core.models import WorkflowPhase
-from core.orchestrator import Orchestrator, run_orchestrator
+from core.orchestrator import run_orchestrator
 from core.skills import SkillManager
 from core.state_machine import DEFAULT_STATE_FILE, load_state
 from vcs.git_handler import GitHandler
@@ -393,6 +393,17 @@ class AgentCLI:
         ui_handler = TerminalUIEventHandler(console=self.console)
         emitter.subscribe(ui_handler.handle_event)
 
+        def repl_input_func(prompt_label: str) -> str:
+            ui_handler.stop_spinner()
+            if hasattr(self.console, "_live_stack") and self.console._live_stack:
+                for live in list(self.console._live_stack):
+                    try:
+                        live.stop()
+                    except Exception:
+                        pass
+                self.console._live_stack.clear()
+            return Prompt.ask(prompt_label, console=self.console)
+
         ui_handler.start_spinner("[cyan]Starte Autonomous Multi-Agent Pipeline...[/cyan]")
         try:
             state = await run_orchestrator(
@@ -406,6 +417,7 @@ class AgentCLI:
                 task_id=task_id,
                 resume_from_state=resume_mode,
                 event_emitter=emitter,
+                input_func=repl_input_func,
             )
             ui_handler.stop_spinner()
 

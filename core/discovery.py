@@ -8,21 +8,23 @@ This module coordinates Phase 1 of the orchestration pipeline:
 5. Provides an interactive approval dialog ([A]pprove & Start Dev, [E]dit, [C]ancel).
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 import json
 import logging
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from pydantic import BaseModel, Field
+if TYPE_CHECKING:
+    from core.cli.events import CLIEventEmitter
+
+from pydantic import BaseModel, Field, field_validator
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
-
-from core.provider import BaseLLMProvider
-from core.skills import SkillManager
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,10 @@ class DiscoveryError(Exception):
 
 class DiscoveryCancelledError(DiscoveryError):
     """Raised when the user explicitly cancels the discovery and spec generation."""
+
+
+from core.provider import BaseLLMProvider
+from core.skills import SkillManager
 
 
 class DiscoveryAnalysis(BaseModel):
@@ -50,6 +56,62 @@ class DiscoveryAnalysis(BaseModel):
         default_factory=list,
         description="Numbered clarifying questions requiring user resolution before coding.",
     )
+
+    @field_validator("blind_spots", mode="before")
+    @classmethod
+    def normalize_blind_spots(cls, v: Any) -> list[str]:
+        """Normalize blind spots from diverse LLM response shapes."""
+        if isinstance(v, str):
+            lines = [line.strip() for line in v.splitlines() if line.strip()]
+            return [line.lstrip("-* ").strip() for line in lines if line]
+        if isinstance(v, list):
+            res = []
+            for item in v:
+                if isinstance(item, dict):
+                    res.append(str(item.get("description") or item.get("text") or item).strip())
+                else:
+                    res.append(str(item).strip())
+            return res
+        return []
+
+    @field_validator("questions", mode="before")
+    @classmethod
+    def normalize_questions(cls, v: Any) -> list[str]:
+        """Normalize questions from diverse LLM response shapes (strings, dicts, lists)."""
+        if isinstance(v, str):
+            lines = [line.strip() for line in v.splitlines() if line.strip()]
+            extracted = []
+            for line in lines:
+                cleaned = re.sub(r"^(?:Q\d+[:.]|\d+[\.)]|-\s*\[?\s*\?\]?)\s+", "", line).strip()
+                if cleaned:
+                    extracted.append(cleaned)
+            return extracted or [v.strip()]
+        if isinstance(v, list):
+            result = []
+            for item in v:
+                if isinstance(item, str):
+                    result.append(item.strip())
+                elif isinstance(item, dict):
+                    val = item.get("question") or item.get("text") or item.get("prompt") or str(item)
+                    result.append(str(val).strip())
+                else:
+                    result.append(str(item).strip())
+            return result
+        return []
+
+
+def _stop_active_spinners(console: Console) -> None:
+    """Ensure any active Rich live displays / status spinners on the console are stopped."""
+    try:
+        if hasattr(console, "_live_stack") and console._live_stack:
+            for live in list(console._live_stack):
+                try:
+                    live.stop()
+                except Exception:
+                    pass
+            console._live_stack.clear()
+    except Exception:
+        pass
 
 
 def gather_repo_context(repo_path: Path, max_file_chars: int = 3500) -> str:
@@ -232,6 +294,7 @@ async def run_discovery_phase(
     input_func: Callable[[str], str] | None = None,
     skill_manager: SkillManager | None = None,
     custom_skills: list[str] | None = None,
+    event_emitter: CLIEventEmitter | None = None,
 ) -> str:
     """Execute the interactive discovery & specification loop.
 
@@ -253,6 +316,7 @@ async def run_discovery_phase(
         input_func: Optional input function for prompting (defaults to Prompt.ask).
         skill_manager: Optional SkillManager instance for modular agent skills.
         custom_skills: Optional list of additional project-specific skill files.
+        event_emitter: Optional event emitter for CLI status and spinner coordination.
 
     Returns:
         The approved SPEC.md markdown string.
@@ -263,6 +327,42 @@ async def run_discovery_phase(
     """
     ui_console = console or Console()
     repo_path = Path(repo_path)
+
+    def _prompt_user(
+        label: str,
+        choices: list[str] | None = None,
+        default: str | None = None,
+    ) -> str:
+        """Prompt user with guaranteed spinner pause and clean error handling."""
+        _stop_active_spinners(ui_console)
+        if event_emitter is not None:
+            try:
+                event_emitter.emit_prompt_start(message=f"Waiting for user input: {label}", prompt_label=label)
+            except Exception:
+                pass
+
+        try:
+            if input_func is not None:
+                return input_func(label).strip()
+
+            if choices:
+                return Prompt.ask(
+                    label,
+                    choices=choices,
+                    default=default,
+                    console=ui_console,
+                ).strip()
+
+            return Prompt.ask(label, console=ui_console).strip()
+        except (KeyboardInterrupt, EOFError):
+            ui_console.print("\n[yellow]Discovery-Phase wurde durch den Benutzer abgebrochen.[/yellow]")
+            raise DiscoveryCancelledError("Discovery workflow was cancelled by user.")
+        finally:
+            if event_emitter is not None:
+                try:
+                    event_emitter.emit_prompt_end()
+                except Exception:
+                    pass
 
     if not raw_requirements.strip():
         raise DiscoveryError("Raw requirements cannot be empty.")
@@ -345,10 +445,7 @@ async def run_discovery_phase(
             ui_console.print(f"[bold cyan]Frage {idx}:[/bold cyan] {question}")
 
             prompt_label = f"  Antwort zu Frage {idx}"
-            if input_func is not None:
-                user_answer = input_func(f"{prompt_label}: ").strip()
-            else:
-                user_answer = Prompt.ask(f"[bold]{prompt_label}[/bold]", console=ui_console).strip()
+            user_answer = _prompt_user(f"[bold]{prompt_label}[/bold]")
 
             if not user_answer:
                 user_answer = "(Standard / Keine Angabe)"
@@ -416,15 +513,11 @@ async def run_discovery_phase(
             "[bold red][C][/bold red]ancel\n"
         )
 
-        if input_func is not None:
-            choice = input_func("Auswahl [A/E/C]: ").strip().lower()
-        else:
-            choice = Prompt.ask(
-                "[bold]Auswahl[/bold]",
-                choices=["a", "approve", "e", "edit", "c", "cancel"],
-                default="a",
-                console=ui_console,
-            ).strip().lower()
+        choice = _prompt_user(
+            "[bold]Auswahl[/bold]",
+            choices=["a", "approve", "e", "edit", "c", "cancel"],
+            default="a",
+        ).lower()
 
         if choice in ("a", "approve"):
             try:
@@ -445,10 +538,7 @@ async def run_discovery_phase(
 
         elif choice in ("e", "edit"):
             ui_console.print("[yellow]Bitte gib dein Feedback oder deine Änderungswünsche ein:[/yellow]")
-            if input_func is not None:
-                feedback = input_func("Feedback: ").strip()
-            else:
-                feedback = Prompt.ask("[bold yellow]Feedback[/bold yellow]", console=ui_console).strip()
+            feedback = _prompt_user("[bold yellow]Feedback[/bold yellow]")
 
             if not feedback:
                 ui_console.print("[dim]Kein Feedback eingegeben. Wiederhole Auswahl.[/dim]")

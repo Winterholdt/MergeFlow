@@ -334,3 +334,94 @@ async def test_run_discovery_phase_invalid_then_approve(tmp_path: Path):
     assert result == spec_md
     assert (tmp_path / "SPEC.md").is_file()
 
+
+def test_discovery_analysis_normalization():
+    """Verify DiscoveryAnalysis normalizes questions and blind spots in diverse formats."""
+    # From dicts
+    data = {
+        "summary": "Summary",
+        "blind_spots": [{"description": "Spot 1"}, "Spot 2"],
+        "questions": [{"question": "Q1?"}, "Q2?"],
+    }
+    model = DiscoveryAnalysis.model_validate(data)
+    assert model.questions == ["Q1?", "Q2?"]
+    assert model.blind_spots == ["Spot 1", "Spot 2"]
+
+    # From multiline string
+    data_str = {
+        "summary": "Summary",
+        "blind_spots": "- Risk A\n* Risk B",
+        "questions": "1. What database?\n2. What auth?",
+    }
+    model_str = DiscoveryAnalysis.model_validate(data_str)
+    assert model_str.questions == ["What database?", "What auth?"]
+    assert model_str.blind_spots == ["Risk A", "Risk B"]
+
+
+def test_stop_active_spinners():
+    """Verify _stop_active_spinners halts active live displays on console."""
+    from core.discovery import _stop_active_spinners
+
+    console = Console()
+    status = console.status("Testing live status")
+    status.start()
+    assert len(console._live_stack) == 1
+
+    _stop_active_spinners(console)
+    assert len(console._live_stack) == 0
+
+
+@pytest.mark.asyncio
+async def test_run_discovery_phase_with_event_emitter_prompts(tmp_path: Path):
+    """Verify USER_PROMPT_START and USER_PROMPT_END events are emitted during prompting."""
+    from core.cli.events import CLIEvent, CLIEventEmitter, EventType
+
+    emitter = CLIEventEmitter()
+    events: list[CLIEvent] = []
+    emitter.subscribe(lambda ev: events.append(ev))
+
+    analysis = DiscoveryAnalysis(
+        summary="Add feature",
+        questions=["Which provider?"],
+    )
+    spec_md = "# SPEC: Add feature"
+    mock_provider = MockLLMProvider(responses=[analysis, spec_md])
+
+    user_inputs = ["AWS", "a"]
+    input_func = lambda _: user_inputs.pop(0)
+
+    console = Console(record=True, width=100)
+    await run_discovery_phase(
+        raw_requirements="Feature",
+        provider=mock_provider,
+        repo_path=tmp_path,
+        console=console,
+        input_func=input_func,
+        event_emitter=emitter,
+    )
+
+    event_types = [e.event_type for e in events]
+    assert EventType.USER_PROMPT_START in event_types
+    assert EventType.USER_PROMPT_END in event_types
+
+
+@pytest.mark.asyncio
+async def test_run_discovery_phase_keyboard_interrupt_prompt(tmp_path: Path):
+    """Verify KeyboardInterrupt during prompt cleanly raises DiscoveryCancelledError."""
+    analysis = DiscoveryAnalysis(summary="Summary", questions=["Q?"])
+    mock_provider = MockLLMProvider(responses=[analysis])
+
+    def cancel_input(_):
+        raise KeyboardInterrupt()
+
+    console = Console(record=True, width=100)
+    with pytest.raises(DiscoveryCancelledError, match="cancelled by user"):
+        await run_discovery_phase(
+            raw_requirements="Feature",
+            provider=mock_provider,
+            repo_path=tmp_path,
+            console=console,
+            input_func=cancel_input,
+        )
+
+

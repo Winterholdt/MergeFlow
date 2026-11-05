@@ -10,12 +10,14 @@ Coordinates the end-to-end autonomous lifecycle across all 5 phases:
 Guarantees persistence of WorkflowState after every phase and step.
 """
 
+from __future__ import annotations
+
 import asyncio
 from collections.abc import Callable
 import inspect
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import uuid
 
 from rich.console import Console
@@ -41,9 +43,11 @@ from core.reviewer import ReviewError, ReviewSummary, run_review_phase
 from core.skills import SkillManager
 from core.state_machine import DEFAULT_STATE_FILE, determine_resume_phase
 from security.gatekeeper import Gatekeeper
-from vcs.ci_watcher import CIWatcher
 from vcs.git_handler import GitHandler
 from vcs.remote_vcs import RemoteVCS
+
+if TYPE_CHECKING:
+    from vcs.ci_watcher import CIWatcher
 
 try:
     from core.cli.events import CLIEventEmitter
@@ -135,7 +139,11 @@ class Orchestrator:
         if self.git.on_commit_callback is None:
             self.git.on_commit_callback = self.save_state
         self.remote_vcs = remote_vcs or RemoteVCS(repo_path=self.repo_path)
-        self.ci_watcher = ci_watcher or CIWatcher(remote_vcs=self.remote_vcs)
+        if ci_watcher is None:
+            from vcs.ci_watcher import CIWatcher
+            self.ci_watcher = CIWatcher(remote_vcs=self.remote_vcs)
+        else:
+            self.ci_watcher = ci_watcher
 
         self.state: WorkflowState | None = None
 
@@ -198,6 +206,13 @@ class Orchestrator:
         )
         self.save_state()
 
+        # Ensure target workspace directory exists and has a git repository initialized
+        try:
+            self.repo_path.mkdir(parents=True, exist_ok=True)
+            await self.git.ensure_repo(default_branch=self.config.workflow.default_branch)
+        except Exception as exc:
+            logger.warning("Could not pre-initialize git repository in '%s': %s", self.repo_path, exc)
+
         if self.event_emitter:
             self.event_emitter.emit_routing(
                 f"Analyzing requirements for Task {self.state.task_id}...",
@@ -233,6 +248,7 @@ class Orchestrator:
                     console=self.console,
                     input_func=self.input_func,
                     skill_manager=self.skill_manager,
+                    event_emitter=self.event_emitter,
                 )
                 self.state.spec_markdown = spec_markdown
                 self.save_state()

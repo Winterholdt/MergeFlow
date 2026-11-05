@@ -13,10 +13,13 @@ from vcs.git_handler import (
     commit_changes,
     create_feature_branch,
     ensure_conventional_commit,
+    ensure_repo,
     get_diff,
-    is_conventional_commit,
-    push_branch,
     get_recent_commits,
+    init_repo,
+    is_conventional_commit,
+    is_repo,
+    push_branch,
     sanitize_slug,
 )
 
@@ -199,3 +202,65 @@ async def test_module_convenience_functions(git_repo: Path):
 
     commits = await get_recent_commits(count=5, repo_path=git_repo)
     assert "quick commit" in commits
+
+
+# ===========================================================================
+# 6. UNINITIALIZED REPOSITORY TESTS (AUTO-INIT & RESILIENCE)
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_is_repo_and_ensure_repo(tmp_path: Path):
+    non_git_dir = tmp_path / "empty_project"
+    non_git_dir.mkdir()
+
+    handler = GitHandler(repo_path=non_git_dir)
+    assert await handler.is_repo() is False
+
+    # First ensure_repo initializes git repository
+    initialized = await handler.ensure_repo(default_branch="main")
+    assert initialized is True
+    assert await handler.is_repo() is True
+
+    # Second ensure_repo detects existing repo
+    second_run = await handler.ensure_repo(default_branch="main")
+    assert second_run is False
+
+    branch = await handler.get_current_branch()
+    assert branch == "main"
+
+
+@pytest.mark.asyncio
+async def test_create_feature_branch_when_repo_not_initialized(tmp_path: Path):
+    """Verify that creating a feature branch in a directory without git auto-initializes git."""
+    uninitialized_dir = tmp_path / "brand_new_workspace"
+    uninitialized_dir.mkdir()
+
+    handler = GitHandler(repo_path=uninitialized_dir)
+    assert await handler.is_repo() is False
+
+    # The exact slug from the user's issue
+    slug = "project-workspace-initialization-for-factory-logistics-tycoon"
+    branch_name = await handler.create_feature_branch(slug)
+
+    assert branch_name == f"feat/SPEC-{slug}"
+    assert await handler.is_repo() is True
+    assert await handler.get_current_branch() == branch_name
+
+    # Check that committing and diffing works as expected
+    (uninitialized_dir / "app.py").write_text("print('Logistics tycoon ready')\n", encoding="utf-8")
+    commit_hash = await handler.commit_changes("feat: initialize tycoon app")
+    assert commit_hash
+
+    diff = await handler.get_diff("main")
+    assert "Logistics tycoon ready" in diff
+
+
+@pytest.mark.asyncio
+async def test_module_level_ensure_repo_functions(tmp_path: Path):
+    target = tmp_path / "module_dir"
+    target.mkdir()
+
+    assert await is_repo(repo_path=target) is False
+    assert await ensure_repo(default_branch="main", repo_path=target) is True
+    assert await is_repo(repo_path=target) is True
+

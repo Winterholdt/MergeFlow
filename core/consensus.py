@@ -45,6 +45,20 @@ class ConsensusStatus(str, Enum):
     REJECTED = "REJECTED"
 
 
+def _stop_active_spinners(console: Console) -> None:
+    """Ensure any active Rich live displays / status spinners on the console are stopped."""
+    try:
+        if hasattr(console, "_live_stack") and console._live_stack:
+            for live in list(console._live_stack):
+                try:
+                    live.stop()
+                except Exception:
+                    pass
+            console._live_stack.clear()
+    except Exception:
+        pass
+
+
 class ConsensusError(Exception):
     """Base exception for consensus and merge phase errors."""
 
@@ -430,6 +444,7 @@ async def run_consensus_phase(
                 )
             )
 
+            _stop_active_spinners(ui_console)
             prompt_text = "[M]anuell übernehmen / [F]orce Merge versuchen / [A]bbruch: "
             if input_func is not None:
                 user_choice = input_func(prompt_text).strip().lower()
@@ -628,6 +643,7 @@ async def run_consensus_phase(
 
     else:
         # Manual confirmation prompt
+        _stop_active_spinners(ui_console)
         prompt_text = "Alle Checks & Reviews bestanden. Merge jetzt ausführen? [y/N]: "
         if input_func is not None:
             user_choice = input_func(prompt_text).strip().lower()

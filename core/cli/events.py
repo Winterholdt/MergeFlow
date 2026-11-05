@@ -34,6 +34,8 @@ class EventType(str, Enum):
     TOOL_END = "tool_end"
     TOKEN = "token"
     STATUS = "status"
+    USER_PROMPT_START = "user_prompt_start"
+    USER_PROMPT_END = "user_prompt_end"
     DONE = "done"
     ERROR = "error"
 
@@ -243,6 +245,36 @@ class CLIEventEmitter:
             event_type=EventType.STATUS,
             message=message,
             agent_name=agent_name,
+            data=data,
+        )
+        self.emit(event)
+        return event
+
+    def emit_prompt_start(
+        self,
+        message: str = "Waiting for user input...",
+        prompt_label: str | None = None,
+        **data: Any,
+    ) -> CLIEvent:
+        """Trigger interactive user prompt start event to pause spinners."""
+        event = CLIEvent(
+            event_type=EventType.USER_PROMPT_START,
+            message=message,
+            content=prompt_label,
+            data=data,
+        )
+        self.emit(event)
+        return event
+
+    def emit_prompt_end(
+        self,
+        message: str = "User input received.",
+        **data: Any,
+    ) -> CLIEvent:
+        """Trigger interactive user prompt completion event."""
+        event = CLIEvent(
+            event_type=EventType.USER_PROMPT_END,
+            message=message,
             data=data,
         )
         self.emit(event)
