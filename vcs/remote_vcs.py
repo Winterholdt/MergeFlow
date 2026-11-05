@@ -176,6 +176,27 @@ class RemoteVCS:
                 return url_match.group(0).strip()
             return stdout.strip()
 
+    @staticmethod
+    def has_ci_configuration(repo_path: Path | str = ".") -> bool:
+        """Check if repository contains standard CI configuration files."""
+        path = Path(repo_path).resolve()
+        gh_workflows = path / ".github" / "workflows"
+        if gh_workflows.is_dir():
+            yaml_files = list(gh_workflows.glob("*.yml")) + list(gh_workflows.glob("*.yaml"))
+            if yaml_files:
+                return True
+        if (path / ".gitlab-ci.yml").is_file() or (path / ".gitlab-ci.yaml").is_file():
+            return True
+        if (path / "azure-pipelines.yml").is_file() or (path / "azure-pipelines.yaml").is_file():
+            return True
+        if (path / ".circleci" / "config.yml").is_file():
+            return True
+        if (path / "bitbucket-pipelines.yml").is_file():
+            return True
+        if (path / "Jenkinsfile").is_file():
+            return True
+        return False
+
     async def get_pipeline_status(self, pr_number: int | None = None) -> PipelineStatus:
         """Query CI pipeline and check statuses for a PR / MR.
 
@@ -188,7 +209,15 @@ class RemoteVCS:
         Raises:
             RemoteVCSError: If the CLI tool command fails.
         """
-        vcs = self.detect_vcs_type()
+        try:
+            vcs = self.detect_vcs_type()
+        except RemoteVCSError as exc:
+            return PipelineStatus(
+                state=PipelineState.NO_PIPELINE,
+                all_passed=True,
+                checks=[],
+                raw_output=str(exc),
+            )
 
         if vcs == VCSType.GITHUB:
             args = ["pr", "checks"]
@@ -197,12 +226,27 @@ class RemoteVCS:
 
             code, stdout, stderr = await self._execute_cli("gh", *args)
             if code != 0:
-                # If no checks are reported or command failed
+                raw = stderr.strip() or stdout.strip()
+                raw_lower = raw.lower()
+                if any(kw in raw_lower for kw in (
+                    "no checks reported",
+                    "no checks",
+                    "no pull requests found",
+                    "no open pull requests",
+                    "not configured",
+                    "could not resolve to a repository",
+                )):
+                    return PipelineStatus(
+                        state=PipelineState.NO_PIPELINE,
+                        all_passed=True,
+                        checks=[],
+                        raw_output=raw,
+                    )
                 return PipelineStatus(
                     state=PipelineState.UNKNOWN,
                     all_passed=False,
                     checks=[],
-                    raw_output=stderr.strip() or stdout.strip(),
+                    raw_output=raw,
                 )
 
             return self._parse_gh_checks(stdout)
@@ -215,11 +259,26 @@ class RemoteVCS:
 
             code, stdout, stderr = await self._execute_cli("glab", *args)
             if code != 0:
+                raw = stderr.strip() or stdout.strip()
+                raw_lower = raw.lower()
+                if any(kw in raw_lower for kw in (
+                    "no pipeline found",
+                    "no pipelines",
+                    "pipeline not found",
+                    "no mr pipeline",
+                    "not found",
+                )):
+                    return PipelineStatus(
+                        state=PipelineState.NO_PIPELINE,
+                        all_passed=True,
+                        checks=[],
+                        raw_output=raw,
+                    )
                 return PipelineStatus(
                     state=PipelineState.UNKNOWN,
                     all_passed=False,
                     checks=[],
-                    raw_output=stderr.strip() or stdout.strip(),
+                    raw_output=raw,
                 )
 
             return self._parse_glab_pipeline(stdout)
@@ -286,11 +345,21 @@ class RemoteVCS:
             )
 
         if not checks:
+            lower = output.lower()
+            if any(kw in lower for kw in (
+                "no checks reported",
+                "no checks",
+                "no pull requests found",
+                "no open pull requests",
+                "no commit found",
+            )):
+                state = PipelineState.NO_PIPELINE
+                all_passed = True
             # Check if text says "All checks have passed" or similar
-            if "pass" in output.lower() or "success" in output.lower():
+            elif "pass" in lower or "success" in lower:
                 state = PipelineState.SUCCESS
                 all_passed = True
-            elif "fail" in output.lower() or "error" in output.lower():
+            elif "fail" in lower or "error" in lower:
                 state = PipelineState.FAILED
                 all_passed = False
             else:
@@ -317,7 +386,10 @@ class RemoteVCS:
     def _parse_glab_pipeline(output: str) -> PipelineStatus:
         """Parse text output of `glab mr pipeline` into structured PipelineStatus."""
         lower = output.lower()
-        if any(kw in lower for kw in ("failed", "failure", "error")):
+        if any(kw in lower for kw in ("no pipeline found", "no pipelines", "pipeline not found", "no mr pipeline")):
+            state = PipelineState.NO_PIPELINE
+            all_passed = True
+        elif any(kw in lower for kw in ("failed", "failure", "error")):
             state = PipelineState.FAILED
             all_passed = False
         elif any(kw in lower for kw in ("running", "pending", "created", "waiting")):
@@ -390,6 +462,11 @@ class RemoteVCS:
 
 
 # Convenience module-level functions
+def has_ci_configuration(repo_path: Path | str = ".") -> bool:
+    """Check if repository contains standard CI configuration files."""
+    return RemoteVCS.has_ci_configuration(repo_path=repo_path)
+
+
 async def create_draft_pr(
     title: str,
     body: str,

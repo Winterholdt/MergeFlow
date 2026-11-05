@@ -179,14 +179,39 @@ async def test_get_pipeline_status_gitlab():
 @pytest.mark.asyncio
 async def test_get_pipeline_status_command_failure():
     async def mock_runner(binary, *args):
-        return 1, "", "No checks reported"
+        return 1, "", "fatal: remote server error (connection refused)"
 
     vcs = RemoteVCS(vcs_type=VCSType.GITHUB, runner=mock_runner)
     status = await vcs.get_pipeline_status()
 
     assert status.state == PipelineState.UNKNOWN
     assert status.all_passed is False
-    assert status.raw_output == "No checks reported"
+    assert "connection refused" in status.raw_output
+
+
+@pytest.mark.asyncio
+async def test_get_pipeline_status_no_checks_reported():
+    async def mock_runner(binary, *args):
+        return 1, "", "no checks reported on the 'feat/calc' branch"
+
+    vcs = RemoteVCS(vcs_type=VCSType.GITHUB, runner=mock_runner)
+    status = await vcs.get_pipeline_status()
+
+    assert status.state == PipelineState.NO_PIPELINE
+    assert status.all_passed is True
+    assert "no checks reported" in status.raw_output
+
+
+@pytest.mark.asyncio
+async def test_get_pipeline_status_gitlab_no_pipeline():
+    async def mock_runner(binary, *args):
+        return 1, "", "no pipeline found for MR 12"
+
+    vcs = RemoteVCS(vcs_type=VCSType.GITLAB, runner=mock_runner)
+    status = await vcs.get_pipeline_status(pr_number=12)
+
+    assert status.state == PipelineState.NO_PIPELINE
+    assert status.all_passed is True
 
 
 # ===========================================================================

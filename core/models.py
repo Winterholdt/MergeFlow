@@ -32,6 +32,7 @@ class PipelineState(str, Enum):
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
     UNKNOWN = "UNKNOWN"
+    NO_PIPELINE = "NO_PIPELINE"
 
 
 class PipelineCheck(BaseModel):
