@@ -50,6 +50,12 @@ from core.orchestrator import (
     OrchestratorError,
     run_orchestrator,
 )
+from core.intervention import (
+    InterventionAction,
+    OrchestrationCancelledError,
+    OrchestrationInterruptedError,
+    prompt_user_intervention,
+)
 from core.models import (
     Finding,
     FindingSeverity,
@@ -101,6 +107,10 @@ __all__ = [
     "Finding",
     "FindingSeverity",
     "Severity",
+    "InterventionAction",
+    "OrchestrationCancelledError",
+    "OrchestrationInterruptedError",
+    "prompt_user_intervention",
     "PipelineCheck",
     "PipelineState",
     "PipelineStatus",

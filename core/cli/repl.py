@@ -60,6 +60,10 @@ from core.cli.settings_menu import (
 from core.cli.ui_handler import TerminalUIEventHandler
 from core.config import AppConfig, load_config
 from core.discovery import DiscoveryCancelledError
+from core.intervention import (
+    OrchestrationCancelledError,
+    OrchestrationInterruptedError,
+)
 from core.models import WorkflowPhase
 from core.orchestrator import run_orchestrator
 from core.skills import SkillManager
@@ -462,10 +466,10 @@ class AgentCLI:
                     )
                 )
 
-        except DiscoveryCancelledError:
+        except (DiscoveryCancelledError, OrchestrationCancelledError) as exc:
             ui_handler.stop_spinner()
-            self.console.print("\n[yellow]Discovery-Phase wurde abgebrochen.[/yellow]")
-        except KeyboardInterrupt:
+            self.console.print(f"\n[yellow]{exc or 'Workflow wurde abgebrochen.'}[/yellow]")
+        except (KeyboardInterrupt, OrchestrationInterruptedError):
             ui_handler.stop_spinner()
             self.console.print("\n[yellow]Workflow durch Benutzer unterbrochen (Ctrl+C).[/yellow]")
         except Exception as exc:

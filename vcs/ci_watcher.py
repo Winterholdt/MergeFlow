@@ -10,10 +10,16 @@ from datetime import datetime
 import logging
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import BaseModel, Field
 
+from core.intervention import (
+    InterventionAction,
+    OrchestrationCancelledError,
+    OrchestrationInterruptedError,
+    prompt_user_intervention,
+)
 from core.models import PipelineCheck, PipelineState, PipelineStatus
 from vcs.remote_vcs import RemoteVCS, RemoteVCSError, VCSType
 
@@ -303,6 +309,8 @@ class CIWatcher:
         timeout: int = 600,
         pr_number: int | None = None,
         branch: str | None = None,
+        input_func: Callable[[str], str] | None = None,
+        console: Any | None = None,
     ) -> PipelineResult:
         """Poll remote pipeline status until completion, failure, or timeout.
 
@@ -311,6 +319,8 @@ class CIWatcher:
             timeout: Maximum allowed time in seconds to wait for completion.
             pr_number: Optional PR/MR number to inspect.
             branch: Optional branch name.
+            input_func: Optional input function for interactive user intervention.
+            console: Optional Rich Console instance.
 
         Returns:
             PipelineResult model with state, pass/fail boolean, and extracted error logs.
@@ -323,6 +333,7 @@ class CIWatcher:
             pr_number,
             branch,
         )
+        unknown_polls = 0
 
         while True:
             elapsed = asyncio.get_event_loop().time() - start_time
@@ -346,6 +357,20 @@ class CIWatcher:
 
             logger.info("Pipeline poll check: state=%s, elapsed=%.1fs", state, elapsed)
 
+            # Check 1: Explicitly no pipeline configured or detected
+            if state == PipelineState.NO_PIPELINE:
+                logger.info("No CI pipeline found or configured on remote VCS (state=NO_PIPELINE). Proceeding without waiting.")
+                return PipelineResult(
+                    status=PipelineState.NO_PIPELINE,
+                    passed=True,
+                    error_logs="",
+                    raw_logs=pipeline_status.raw_output or "Keine CI-Pipeline konfiguriert.",
+                    checks=[],
+                    details_url=pipeline_status.url,
+                    duration_seconds=elapsed,
+                )
+
+            # Check 2: Success
             if state == PipelineState.SUCCESS or pipeline_status.all_passed:
                 logger.info("Pipeline succeeded successfully after %.1fs.", elapsed)
                 return PipelineResult(
@@ -358,6 +383,7 @@ class CIWatcher:
                     duration_seconds=elapsed,
                 )
 
+            # Check 3: Failure
             if state == PipelineState.FAILED:
                 logger.warning("Pipeline failed after %.1fs. Extracting error logs...", elapsed)
                 raw_logs = await self.fetch_failure_logs(pr_number=pr_number)
@@ -374,6 +400,38 @@ class CIWatcher:
                     details_url=pipeline_status.url,
                     duration_seconds=elapsed,
                 )
+
+            # Check 4: If state is UNKNOWN, verify if repo actually has any CI config
+            if state == PipelineState.UNKNOWN:
+                unknown_polls += 1
+                has_ci = RemoteVCS.has_ci_configuration(self.repo_path)
+                # If there are no CI files in the repository and remote has no checks, there is no pipeline!
+                if not has_ci and not pipeline_status.checks:
+                    logger.info(
+                        "No CI configuration found in '%s' and no remote checks reported. Skipping CI loop.",
+                        self.repo_path,
+                    )
+                    return PipelineResult(
+                        status=PipelineState.NO_PIPELINE,
+                        passed=True,
+                        error_logs="",
+                        raw_logs=pipeline_status.raw_output or "Keine CI-Konfiguration im Projekt vorhanden.",
+                        checks=[],
+                        details_url=pipeline_status.url,
+                        duration_seconds=elapsed,
+                    )
+                # If unknown continues for >= 2 polls and 0 checks, treat as NO_PIPELINE to avoid infinite wait
+                if unknown_polls >= 2 and not pipeline_status.checks and elapsed >= 10.0:
+                    logger.info("Checks remain UNKNOWN with 0 checks for %.1fs. Treating as NO_PIPELINE.", elapsed)
+                    return PipelineResult(
+                        status=PipelineState.NO_PIPELINE,
+                        passed=True,
+                        error_logs="",
+                        raw_logs=pipeline_status.raw_output or "Keine CI-Checks gefunden.",
+                        checks=[],
+                        details_url=pipeline_status.url,
+                        duration_seconds=elapsed,
+                    )
 
             # Check for timeout
             if elapsed >= timeout:
@@ -395,9 +453,34 @@ class CIWatcher:
                     duration_seconds=elapsed,
                 )
 
-            # Still pending or running - sleep until next check
+            # Still pending or running - sleep until next check, with user intervention handling
             sleep_time = min(float(poll_interval), max(0.1, timeout - elapsed))
-            await asyncio.sleep(sleep_time)
+            try:
+                await asyncio.sleep(sleep_time)
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                logger.info("Pipeline waiting loop interrupted by user.")
+                action = prompt_user_intervention(
+                    console=console,
+                    input_func=input_func,
+                    context=f"Warten auf CI-Pipeline (Status: {state}, {elapsed:.0f}s vergangen)",
+                )
+                if action == InterventionAction.SKIP:
+                    logger.info("User requested SKIP for CI wait.")
+                    return PipelineResult(
+                        status=PipelineState.NO_PIPELINE,
+                        passed=True,
+                        error_logs="",
+                        raw_logs="CI-Warten per Text-Anweisung übersprungen.",
+                        checks=pipeline_status.checks,
+                        details_url=pipeline_status.url,
+                        duration_seconds=elapsed,
+                    )
+                elif action == InterventionAction.PAUSE:
+                    raise OrchestrationInterruptedError("Workflow während CI-Warteschleife pausiert.")
+                elif action == InterventionAction.CONTINUE:
+                    continue
+                else:
+                    raise OrchestrationCancelledError("CI-Warten durch Benutzer abgebrochen.")
 
 
 # Module-level convenience function
@@ -409,6 +492,8 @@ async def wait_for_pipeline(
     remote_vcs: RemoteVCS | None = None,
     repo_path: Path | str = ".",
     vcs_type: str = "auto",
+    input_func: Callable[[str], str] | None = None,
+    console: Any | None = None,
 ) -> PipelineResult:
     """Wait for remote CI pipeline and return structured result with error extraction."""
     watcher = CIWatcher(
@@ -421,4 +506,6 @@ async def wait_for_pipeline(
         timeout=timeout,
         pr_number=pr_number,
         branch=branch,
+        input_func=input_func,
+        console=console,
     )

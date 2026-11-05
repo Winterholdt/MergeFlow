@@ -21,6 +21,7 @@ from collections.abc import Callable
 import logging
 from pathlib import Path
 import re
+import sys
 from typing import Any, TYPE_CHECKING
 
 from rich.console import Console
@@ -28,7 +29,13 @@ from rich.panel import Panel
 
 from core.dev_loop import DevActionType, DevAgentStep
 from core.discovery import gather_repo_context
-from core.models import Finding, FindingSeverity, Severity, WorkflowPhase, WorkflowState
+from core.intervention import (
+    InterventionAction,
+    OrchestrationCancelledError,
+    OrchestrationInterruptedError,
+    prompt_user_intervention,
+)
+from core.models import Finding, FindingSeverity, PipelineState, Severity, WorkflowPhase, WorkflowState
 from core.provider import BaseLLMProvider
 from core.skills import SkillManager
 from security.gatekeeper import Gatekeeper
@@ -306,219 +313,253 @@ async def run_ci_healing_loop(
         pr_number,
     )
 
-    while True:
-        # Step 1: Poll remote pipeline status
-        pipeline_result = await active_watcher.wait_for_pipeline(
-            poll_interval=poll_interval,
-            timeout=timeout,
-            pr_number=pr_number,
-            branch=state.branch_name,
-        )
-
-        # Step 2: Pipeline is green
-        if pipeline_result.passed:
-            logger.info("CI pipeline passed! Phase 3 Self-Healing completed successfully.")
-            state.transition_to(WorkflowPhase.REVIEW)
-            return True
-
-        # Step 3: Pipeline is red / failed
-        logger.warning(
-            "CI pipeline failed on branch '%s'. Retry attempt %d of %d.",
-            state.branch_name,
-            state.ci_retry_count,
-            max_retries,
-        )
-
-        # Circuit-Breaker check
-        if state.ci_retry_count >= max_retries:
-            logger.error(
-                "CIRCUIT-BREAKER TRIGGERED: Exceeded maximum CI retries (%d). Aborting healing loop.",
-                max_retries,
-            )
-            state.transition_to(WorkflowPhase.HUMAN_INTERVENTION_REQUIRED)
-            state.metadata["circuit_breaker_triggered"] = True
-            state.metadata["failed_phase"] = WorkflowPhase.CI_LOOP.value
-            state.metadata["ci_error"] = pipeline_result.error_logs
-
-            # Record diagnostic finding and notify user
-            failure_finding = Finding(
-                file=f"ci-pipeline:{state.branch_name}",
-                severity=Severity.BLOCKER,
-                issue=(
-                    f"Remote pipeline on branch '{state.branch_name}' failed after {max_retries} remediation "
-                    f"attempts. Circuit breaker triggered to prevent infinite healing cycles.\n\n"
-                    f"Extracted CI Error:\n{pipeline_result.error_logs[:1200]}"
-                ),
-                suggestion="Investigate the pipeline logs on remote VCS and resolve issues manually.",
-            )
-            state.add_finding(failure_finding)
-
-            failed_checks = [
-                c.name for c in pipeline_result.checks if c.conclusion in ("failure", "timed_out", "cancelled")
-            ]
-            checks_info = f"\nFehlgeschlagene Jobs: {', '.join(failed_checks)}" if failed_checks else ""
-            error_preview = (pipeline_result.error_logs or pipeline_result.raw_logs or "Keine Details").strip()
-
-            conflict_report = (
-                f"[bold red]CIRCUIT-BREAKER AUSGELÖST: CI-Ping-Pong-Bremse aktiviert![/bold red]\n\n"
-                f"Die CI-Pipeline auf Branch '{state.branch_name}' konnte nach {max_retries} Heilungs-Runden nicht behoben werden.{checks_info}\n\n"
-                f"[bold]Extrahierte Fehlermeldungen:[/bold]\n{error_preview[:1500]}\n"
-            )
-            ui_console.print(
-                Panel(
-                    conflict_report,
-                    title="[bold red]Konsolidierter CI-Konflikt-Report[/bold red]",
-                    border_style="red",
-                )
+    try:
+        while True:
+            # Step 1: Poll remote pipeline status
+            pipeline_result = await active_watcher.wait_for_pipeline(
+                poll_interval=poll_interval,
+                timeout=timeout,
+                pr_number=pr_number,
+                branch=state.branch_name,
+                input_func=input_func,
+                console=ui_console,
             )
 
-            _stop_active_spinners(ui_console)
-            prompt_text = "[M]anuell übernehmen / [F]orce Merge versuchen / [A]bbruch: "
-            if input_func is not None:
-                user_choice = input_func(prompt_text).strip().lower()
-            else:
-                try:
-                    user_choice = input(prompt_text).strip().lower()
-                except (EOFError, KeyboardInterrupt, OSError):
-                    user_choice = "a"
-
-            if user_choice in ("m", "manuell", "manual"):
-                ui_console.print(
-                    "[yellow]Manuelle Übernahme gewählt. Workflow pausiert in Phase 'HUMAN_INTERVENTION_REQUIRED'. "
-                    "Nach manueller Fehlerbehebung kann mit '--resume' fortgesetzt werden.[/yellow]"
-                )
-                return False
-
-            elif user_choice in ("f", "force", "force merge"):
-                ui_console.print("[cyan]Versuche Force Merge trotz CI-Fehlern...[/cyan]")
-                try:
-                    pr_num = pr_number or extract_pr_number_from_url(state.metadata.get("pr_url"))
-                    exit_code, stdout, stderr = await active_vcs.merge_pr(
-                        pr_number=pr_num,
-                        auto=False,
-                        squash=True,
-                    )
-                    state.metadata["merged"] = True
-                    state.metadata["merge_mode"] = "force"
-                    state.metadata["merge_output"] = stdout.strip() or stderr.strip()
-                    state.transition_to(WorkflowPhase.DONE)
+            # Step 2: Pipeline is green or no pipeline exists
+            if pipeline_result.passed:
+                if pipeline_result.status == PipelineState.NO_PIPELINE:
+                    logger.info("No CI pipeline found for branch '%s'. Continuing directly to Phase 4 (REVIEW).", state.branch_name)
                     ui_console.print(
                         Panel(
-                            "[bold green]✓ Force Merge erfolgreich durchgeführt![/bold green]",
-                            title="[bold green]Force Merge Erfolgreich[/bold green]",
-                            border_style="green",
+                            f"[yellow]ℹ Keine CI-Pipeline gefunden oder konfiguriert für Branch '{state.branch_name}'.[/yellow]\n\n"
+                            f"[dim]CI-Warteschleife übersprungen – fahre ohne CI-Loop direkt mit Phase 4 (REVIEW) fort.[/dim]",
+                            title="[cyan]CI-Pipeline Nicht Vorhanden[/cyan]",
+                            border_style="cyan",
                         )
                     )
-                    return True
-                except Exception as exc:
-                    logger.error("Force merge failed: %s", exc)
-                    state.transition_to(WorkflowPhase.FAILED)
-                    state.metadata["merge_error"] = str(exc)
-                    ui_console.print(f"[bold red]Force Merge fehlgeschlagen: {exc}[/bold red]")
+                else:
+                    logger.info("CI pipeline passed! Phase 3 Self-Healing completed successfully.")
+                state.transition_to(WorkflowPhase.REVIEW)
+                return True
+
+            # Step 3: Pipeline is red / failed
+            logger.warning(
+                "CI pipeline failed on branch '%s'. Retry attempt %d of %d.",
+                state.branch_name,
+                state.ci_retry_count,
+                max_retries,
+            )
+
+            # Circuit-Breaker check
+            if state.ci_retry_count >= max_retries:
+                logger.error(
+                    "CIRCUIT-BREAKER TRIGGERED: Exceeded maximum CI retries (%d). Aborting healing loop.",
+                    max_retries,
+                )
+                state.transition_to(WorkflowPhase.HUMAN_INTERVENTION_REQUIRED)
+                state.metadata["circuit_breaker_triggered"] = True
+                state.metadata["failed_phase"] = WorkflowPhase.CI_LOOP.value
+                state.metadata["ci_error"] = pipeline_result.error_logs
+
+                # Record diagnostic finding and notify user
+                failure_finding = Finding(
+                    file=f"ci-pipeline:{state.branch_name}",
+                    severity=Severity.BLOCKER,
+                    issue=(
+                        f"Remote pipeline on branch '{state.branch_name}' failed after {max_retries} remediation "
+                        f"attempts. Circuit breaker triggered to prevent infinite healing cycles.\n\n"
+                        f"Extracted CI Error:\n{pipeline_result.error_logs[:1200]}"
+                    ),
+                    suggestion="Investigate the pipeline logs on remote VCS and resolve issues manually.",
+                )
+                state.add_finding(failure_finding)
+
+                failed_checks = [
+                    c.name for c in pipeline_result.checks if c.conclusion in ("failure", "timed_out", "cancelled")
+                ]
+                checks_info = f"\nFehlgeschlagene Jobs: {', '.join(failed_checks)}" if failed_checks else ""
+                error_preview = (pipeline_result.error_logs or pipeline_result.raw_logs or "Keine Details").strip()
+
+                conflict_report = (
+                    f"[bold red]CIRCUIT-BREAKER AUSGELÖST: CI-Ping-Pong-Bremse aktiviert![/bold red]\n\n"
+                    f"Die CI-Pipeline auf Branch '{state.branch_name}' konnte nach {max_retries} Heilungs-Runden nicht behoben werden.{checks_info}\n\n"
+                    f"[bold]Extrahierte Fehlermeldungen:[/bold]\n{error_preview[:1500]}\n"
+                )
+                ui_console.print(
+                    Panel(
+                        conflict_report,
+                        title="[bold red]Konsolidierter CI-Konflikt-Report[/bold red]",
+                        border_style="red",
+                    )
+                )
+
+                _stop_active_spinners(ui_console)
+                prompt_text = "[M]anuell übernehmen / [F]orce Merge versuchen / [A]bbruch: "
+                if input_func is not None:
+                    user_choice = input_func(prompt_text).strip().lower()
+                elif sys.stdin.isatty():
+                    try:
+                        user_choice = input(prompt_text).strip().lower()
+                    except (EOFError, KeyboardInterrupt, OSError):
+                        user_choice = "a"
+                else:
+                    user_choice = "a"
+
+                if user_choice in ("m", "manuell", "manual"):
+                    ui_console.print(
+                        "[yellow]Manuelle Übernahme gewählt. Workflow pausiert in Phase 'HUMAN_INTERVENTION_REQUIRED'. "
+                        "Nach manueller Fehlerbehebung kann mit '--resume' fortgesetzt werden.[/yellow]"
+                    )
                     return False
 
-            else:
-                ui_console.print("[bold red]Vorgang durch Benutzer abgebrochen.[/bold red]")
-                state.transition_to(WorkflowPhase.FAILED)
-                return False
+                elif user_choice in ("f", "force", "force merge"):
+                    ui_console.print("[cyan]Versuche Force Merge trotz CI-Fehlern...[/cyan]")
+                    try:
+                        pr_num = pr_number or extract_pr_number_from_url(state.metadata.get("pr_url"))
+                        exit_code, stdout, stderr = await active_vcs.merge_pr(
+                            pr_number=pr_num,
+                            auto=False,
+                            squash=True,
+                        )
+                        state.metadata["merged"] = True
+                        state.metadata["merge_mode"] = "force"
+                        state.metadata["merge_output"] = stdout.strip() or stderr.strip()
+                        state.transition_to(WorkflowPhase.DONE)
+                        ui_console.print(
+                            Panel(
+                                "[bold green]✓ Force Merge erfolgreich durchgeführt![/bold green]",
+                                title="[bold green]Force Merge Erfolgreich[/bold green]",
+                                border_style="green",
+                            )
+                        )
+                        return True
+                    except Exception as exc:
+                        logger.error("Force merge failed: %s", exc)
+                        state.transition_to(WorkflowPhase.FAILED)
+                        state.metadata["merge_error"] = str(exc)
+                        ui_console.print(f"[bold red]Force Merge fehlgeschlagen: {exc}[/bold red]")
+                        return False
 
-        if provider is None:
-            raise CIHealingError(
-                "Cannot perform CI self-healing: No BaseLLMProvider was supplied for the healing agent."
-            )
+                else:
+                    ui_console.print("[bold red]Vorgang durch Benutzer abgebrochen.[/bold red]")
+                    state.transition_to(WorkflowPhase.FAILED)
+                    return False
 
-        # Increment retry counter
-        state.increment_ci_retry()
-        logger.info(
-            "Initiating CI Healing Agent cycle (%d/%d)...",
-            state.ci_retry_count,
-            max_retries,
-        )
-
-        # Gather context: recent commits, repo context, failure logs
-        recent_commits = await active_git.get_recent_commits(count=5)
-        repo_context = gather_repo_context(repo_root)
-        system_prompt = load_ci_healing_prompt(
-            skill_manager=skill_manager,
-            custom_skills=custom_skills,
-        )
-
-        history: list[str] = []
-
-        # Run healing agent iterations
-        for iteration in range(1, agent_max_iterations + 1):
-            logger.info("CI Healing Agent turn %d/%d", iteration, agent_max_iterations)
-
-            turn_prompt = (
-                f"### REGEL (FIX-Modus):\n"
-                f"Du befindest dich im FIX-Modus. Führe KEINE Refactorings durch und ändere keine funktionierende "
-                f"Geschäftslogik außerhalb des gemeldeten Fehlers. Behebe ausschließlich das gemeldete Problem.\n\n"
-                f"### CI Pipeline Failure Logs:\n{pipeline_result.error_logs or pipeline_result.raw_logs}\n\n"
-                f"### Recent Git Commits:\n{recent_commits}\n\n"
-                f"### Active Branch:\n{state.branch_name}\n\n"
-                f"### Repository Context:\n{repo_context}\n\n"
-            )
-            if state.spec_markdown:
-                turn_prompt += f"### Specification:\n{state.spec_markdown[:1500]}\n\n"
-
-            if history:
-                turn_prompt += "### Previous Diagnostic Actions & Results:\n" + "\n".join(history[-5:]) + "\n\n"
-
-            turn_prompt += (
-                "Diagnose the failure root cause, correct files via Gatekeeper, verify with local tests, "
-                "and commit with 'fix(ci): <reason>'. Output a valid JSON DevAgentStep."
-            )
-
-            try:
-                step = await provider.complete(
-                    prompt=turn_prompt,
-                    system_prompt=system_prompt,
-                    json_schema=DevAgentStep,
+            if provider is None:
+                raise CIHealingError(
+                    "Cannot perform CI self-healing: No BaseLLMProvider was supplied for the healing agent."
                 )
-                if not isinstance(step, DevAgentStep):
-                    step = DevAgentStep.model_validate(step)
-            except Exception as exc:
-                logger.warning("Healing agent LLM completion error on turn %d: %s", iteration, exc)
-                history.append(f"Turn {iteration} LLM Error: {exc}")
-                continue
 
-            logger.info("CI Healing Action [%s]: %s", step.action_type, step.thought)
-
-            if step.action_type == DevActionType.COMPLETE:
-                logger.info("Healing agent declared remediation complete on turn %d.", iteration)
-                break
-
-            success, outcome = await _execute_healing_step(
-                step=step,
-                repo_root=repo_root,
-                gatekeeper=active_gatekeeper,
-                shell_runner=shell_runner,
-                git_handler=active_git,
-                state=state,
+            # Increment retry counter
+            state.increment_ci_retry()
+            logger.info(
+                "Initiating CI Healing Agent cycle (%d/%d)...",
+                state.ci_retry_count,
+                max_retries,
             )
 
-            history.append(
-                f"Turn {iteration} [{step.action_type}]: {step.thought}\nOutcome (Success={success}): {outcome}"
+            # Gather context: recent commits, repo context, failure logs
+            recent_commits = await active_git.get_recent_commits(count=5)
+            repo_context = gather_repo_context(repo_root)
+            system_prompt = load_ci_healing_prompt(
+                skill_manager=skill_manager,
+                custom_skills=custom_skills,
             )
 
-        # After healing agent steps, commit any leftover uncommitted changes
-        try:
-            has_uncommitted = await active_git.has_uncommitted_changes()
-            if has_uncommitted:
+            history: list[str] = []
+
+            # Run healing agent iterations
+            for iteration in range(1, agent_max_iterations + 1):
+                logger.info("CI Healing Agent turn %d/%d", iteration, agent_max_iterations)
+
+                turn_prompt = (
+                    f"### REGEL (FIX-Modus):\n"
+                    f"Du befindest dich im FIX-Modus. Führe KEINE Refactorings durch und ändere keine funktionierende "
+                    f"Geschäftslogik außerhalb des gemeldeten Fehlers. Behebe ausschließlich das gemeldete Problem.\n\n"
+                    f"### CI Pipeline Failure Logs:\n{pipeline_result.error_logs or pipeline_result.raw_logs}\n\n"
+                    f"### Recent Git Commits:\n{recent_commits}\n\n"
+                    f"### Active Branch:\n{state.branch_name}\n\n"
+                    f"### Repository Context:\n{repo_context}\n\n"
+                )
+                if state.spec_markdown:
+                    turn_prompt += f"### Specification:\n{state.spec_markdown[:1500]}\n\n"
+
+                if history:
+                    turn_prompt += "### Previous Diagnostic Actions & Results:\n" + "\n".join(history[-5:]) + "\n\n"
+
+                turn_prompt += (
+                    "Diagnose the failure root cause, correct files via Gatekeeper, verify with local tests, "
+                    "and commit with 'fix(ci): <reason>'. Output a valid JSON DevAgentStep."
+                )
+
                 try:
-                    is_drift, drift_reason = await active_git.check_scope_drift()
-                    if is_drift:
-                        logger.warning("Scope-Drift-Guard Warnung vor CI-Healing Commit: %s", drift_reason)
-                except Exception as drift_err:
-                    logger.debug("Scope drift check error: %s", drift_err)
+                    step = await provider.complete(
+                        prompt=turn_prompt,
+                        system_prompt=system_prompt,
+                        json_schema=DevAgentStep,
+                    )
+                    if not isinstance(step, DevAgentStep):
+                        step = DevAgentStep.model_validate(step)
+                except Exception as exc:
+                    logger.warning("Healing agent LLM completion error on turn %d: %s", iteration, exc)
+                    history.append(f"Turn {iteration} LLM Error: {exc}")
+                    continue
 
-                logger.info("Staging and committing remaining fixes from healing agent.")
-                default_msg = format_ci_commit_message(f"remediate CI failure attempt {state.ci_retry_count}")
-                await active_git.commit_changes(default_msg)
+                logger.info("CI Healing Action [%s]: %s", step.action_type, step.thought)
 
-            # Push fixes to remote branch
-            logger.info("Pushing healed commits to remote branch '%s'.", state.branch_name)
-            await active_git.push_branch(branch=state.branch_name)
-            logger.info("Pushed healed commits successfully. Re-polling pipeline...")
-        except Exception as git_exc:
-            logger.warning("Git commit/push encountered an issue during healing: %s", git_exc)
+                if step.action_type == DevActionType.COMPLETE:
+                    logger.info("Healing agent declared remediation complete on turn %d.", iteration)
+                    break
+
+                success, outcome = await _execute_healing_step(
+                    step=step,
+                    repo_root=repo_root,
+                    gatekeeper=active_gatekeeper,
+                    shell_runner=shell_runner,
+                    git_handler=active_git,
+                    state=state,
+                )
+
+                history.append(
+                    f"Turn {iteration} [{step.action_type}]: {step.thought}\nOutcome (Success={success}): {outcome}"
+                )
+
+            # After healing agent steps, commit any leftover uncommitted changes
+            try:
+                has_uncommitted = await active_git.has_uncommitted_changes()
+                if has_uncommitted:
+                    try:
+                        is_drift, drift_reason = await active_git.check_scope_drift()
+                        if is_drift:
+                            logger.warning("Scope-Drift-Guard Warnung vor CI-Healing Commit: %s", drift_reason)
+                    except Exception as drift_err:
+                        logger.debug("Scope drift check error: %s", drift_err)
+
+                    logger.info("Staging and committing remaining fixes from healing agent.")
+                    default_msg = format_ci_commit_message(f"remediate CI failure attempt {state.ci_retry_count}")
+                    await active_git.commit_changes(default_msg)
+
+                # Push fixes to remote branch
+                logger.info("Pushing healed commits to remote branch '%s'.", state.branch_name)
+                await active_git.push_branch(branch=state.branch_name)
+                logger.info("Pushed healed commits successfully. Re-polling pipeline...")
+            except Exception as git_exc:
+                logger.warning("Git commit/push encountered an issue during healing: %s", git_exc)
+
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        logger.info("CI healing loop interrupted by user.")
+        action = prompt_user_intervention(
+            console=ui_console,
+            input_func=input_func,
+            context=f"CI-Heilungsschleife auf Branch '{state.branch_name}' (Versuch {state.ci_retry_count}/{max_retries})",
+        )
+        if action == InterventionAction.SKIP:
+            ui_console.print("[yellow]CI-Heilungsschleife per Text-Anweisung übersprungen. Fahre mit Phase 4 (REVIEW) fort.[/yellow]")
+            state.transition_to(WorkflowPhase.REVIEW)
+            return True
+        elif action == InterventionAction.PAUSE:
+            state.transition_to(WorkflowPhase.HUMAN_INTERVENTION_REQUIRED)
+            return False
+        else:
+            state.transition_to(WorkflowPhase.FAILED)
+            raise OrchestrationCancelledError("CI-Heilungsschleife durch Benutzer abgebrochen.")

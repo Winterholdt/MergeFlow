@@ -37,6 +37,12 @@ from core.discovery import (
     run_discovery_phase,
 )
 from core.healing_loop import CIHealingError, run_ci_healing_loop
+from core.intervention import (
+    InterventionAction,
+    OrchestrationCancelledError,
+    OrchestrationInterruptedError,
+    prompt_user_intervention,
+)
 from core.models import WorkflowPhase, WorkflowState
 from core.provider import BaseLLMProvider, get_provider
 from core.reviewer import ReviewError, ReviewSummary, run_review_phase
@@ -147,6 +153,17 @@ class Orchestrator:
 
         self.state: WorkflowState | None = None
 
+    def _get_next_phase(self, phase_str: str | None) -> WorkflowPhase:
+        """Determine next phase when skipping."""
+        mapping = {
+            WorkflowPhase.SPEC_DISCOVERY.value: WorkflowPhase.DEV_LOOP,
+            WorkflowPhase.DEV_LOOP.value: WorkflowPhase.CI_LOOP,
+            WorkflowPhase.CI_LOOP.value: WorkflowPhase.REVIEW,
+            WorkflowPhase.REVIEW.value: WorkflowPhase.CONSENSUS,
+            WorkflowPhase.CONSENSUS.value: WorkflowPhase.DONE,
+        }
+        return mapping.get(str(phase_str), WorkflowPhase.REVIEW)
+
     def save_state(self) -> Path:
         """Persist the current workflow state to disk.
 
@@ -225,6 +242,40 @@ class Orchestrator:
                 self.event_emitter.emit_done("Workflow already in DONE state.", state=self.state)
             return self.state
 
+        try:
+            return await self._execute_phases(resume_phase=resume_phase)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            logger.info("Workflow execution interrupted by user (Ctrl+C).")
+            if self.event_emitter:
+                self.event_emitter.emit_status("Workflow durch Benutzer unterbrochen.")
+            self.save_state()
+            action = prompt_user_intervention(
+                console=self.console,
+                input_func=self.input_func,
+                context=f"Workflow in Phase '{self.state.current_phase}' (Task {self.state.task_id})",
+            )
+            if action == InterventionAction.SKIP:
+                next_phase = self._get_next_phase(self.state.current_phase)
+                logger.info("Intervention SKIP: transitioning from %s to %s", self.state.current_phase, next_phase.value)
+                self.state.transition_to(next_phase)
+                self.save_state()
+                return await self.run(requirements=requirements, task_id=self.state.task_id, resume_from_state=True)
+            elif action == InterventionAction.PAUSE:
+                self.state.transition_to(WorkflowPhase.HUMAN_INTERVENTION_REQUIRED)
+                self.save_state()
+                self.console.print(
+                    f"\n[bold yellow]Workflow pausiert.[/bold yellow] Fortsetzen mit: [bold cyan]orch --resume {self.state.task_id}[/bold cyan]"
+                )
+                return self.state
+            elif action == InterventionAction.CONTINUE:
+                return await self.run(requirements=requirements, task_id=self.state.task_id, resume_from_state=True)
+            else:
+                self.state.metadata["interrupted"] = True
+                self.save_state()
+                raise OrchestrationCancelledError("Workflow durch Benutzer abgebrochen.")
+
+    async def _execute_phases(self, resume_phase: WorkflowPhase | None) -> WorkflowState:
+        """Execute the workflow phases sequentially."""
         # =====================================================================
         # Phase 1: Requirements Discovery & Spec Generation
         # =====================================================================

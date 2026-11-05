@@ -89,15 +89,19 @@ def main() -> None:
     """CLI script entry-point."""
     parser = build_cli_parser()
     args = parser.parse_args()
-    code = asyncio.run(
-        run_cli(
-            config_path=args.config_path,
-            repo_path=args.repo_path,
-            state_path=args.state_path,
-            debug=args.debug,
+    try:
+        code = asyncio.run(
+            run_cli(
+                config_path=args.config_path,
+                repo_path=args.repo_path,
+                state_path=args.state_path,
+                debug=args.debug,
+            )
         )
-    )
-    sys.exit(code)
+        sys.exit(code)
+    except KeyboardInterrupt:
+        print("\n(Abgebrochen)")
+        sys.exit(130)
 
 
 if __name__ == "__main__":

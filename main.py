@@ -62,6 +62,10 @@ from core.cli.settings_menu import (
 from core.cli.ui_handler import TerminalUIEventHandler
 from core.config import AppConfig, load_config
 from core.discovery import DiscoveryCancelledError
+from core.intervention import (
+    OrchestrationCancelledError,
+    OrchestrationInterruptedError,
+)
 from core.models import WorkflowPhase
 from core.orchestrator import run_orchestrator
 from core.skills import SkillManager
@@ -452,11 +456,11 @@ async def async_main(args: argparse.Namespace) -> int:
             )
             return 1
 
-    except DiscoveryCancelledError:
+    except (DiscoveryCancelledError, OrchestrationCancelledError) as exc:
         ui_handler.stop_spinner()
-        console.print("\n[yellow]Discovery-Phase wurde vom Benutzer abgebrochen.[/yellow]")
+        console.print(f"\n[yellow]{exc or 'Vorgang wurde vom Benutzer abgebrochen.'}[/yellow]")
         return 1
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, OrchestrationInterruptedError):
         ui_handler.stop_spinner()
         console.print("\n[yellow]Vorgang durch Benutzer unterbrochen (Ctrl+C).[/yellow]")
         return 130
@@ -471,8 +475,12 @@ def main() -> None:
     """CLI entry-point."""
     parser = build_parser()
     args = parser.parse_args()
-    exit_code = asyncio.run(async_main(args))
-    sys.exit(exit_code)
+    try:
+        exit_code = asyncio.run(async_main(args))
+        sys.exit(exit_code)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Vorgang durch Benutzer abgebrochen (Ctrl+C).[/yellow]")
+        sys.exit(130)
 
 
 if __name__ == "__main__":
