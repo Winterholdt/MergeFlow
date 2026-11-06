@@ -80,6 +80,41 @@ def test_load_reviewer_prompt_missing_file(tmp_path: Path):
         load_reviewer_prompt("functional", prompt_dir=tmp_path)
 
 
+def test_load_reviewer_prompt_from_foreign_working_directory(tmp_path: Path, monkeypatch):
+    """Verify prompt is loaded from package prompts when running in foreign directory without prompts/."""
+    monkeypatch.chdir(tmp_path)
+    # CWD has no prompts folder now
+    assert not (tmp_path / "prompts").exists()
+    content = load_reviewer_prompt("functional")
+    assert "ReviewResult" in content
+    assert "BLOCKER" in content
+    assert "APPROVED" in content
+
+
+def test_load_reviewer_prompt_local_override(tmp_path: Path, monkeypatch):
+    """Verify local project prompts directory overrides packaged prompt."""
+    custom_dir = tmp_path / "prompts"
+    custom_dir.mkdir(parents=True, exist_ok=True)
+    custom_prompt = custom_dir / "review_functional.md"
+    custom_prompt.write_text("CUSTOM PROJECT FUNCTIONAL PROMPT {{PHASE_SKILLS}}", encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    content = load_reviewer_prompt("functional")
+    assert "CUSTOM PROJECT FUNCTIONAL PROMPT" in content
+
+
+def test_load_reviewer_prompt_fallback_when_all_files_missing(tmp_path: Path, monkeypatch):
+    """Verify built-in fallback prompt is used when both local and package prompts are missing."""
+    import core.reviewer as rev_module
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(rev_module, "PACKAGE_PROMPT_DIR", tmp_path / "nonexistent")
+
+    content = load_reviewer_prompt("functional")
+    assert "Functional & Business Logic Code Reviewer" in content
+    assert "ReviewResult" in content
+
+
 # ============================================================================
 # 2. APPROVAL & CONSOLIDATION LOGIC TESTS
 # ============================================================================

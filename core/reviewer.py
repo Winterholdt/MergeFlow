@@ -27,6 +27,7 @@ from core.skills import SkillManager
 logger = logging.getLogger(__name__)
 
 DEFAULT_PROMPT_DIR = Path("prompts")
+PACKAGE_PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 REVIEWER_PERSONAS: tuple[str, ...] = (
     "functional",
@@ -40,6 +41,46 @@ PROMPT_FILE_MAP: dict[str, str] = {
     "architecture": "review_architecture.md",
     "security": "review_security.md",
     "qa_testing": "review_qa_tests.md",
+}
+
+FALLBACK_REVIEWER_PROMPTS: dict[str, str] = {
+    "functional": (
+        "# Persona: Functional & Business Logic Code Reviewer\n\n"
+        "You are the Functional & Business Logic Code Reviewer for MergeFlow.\n"
+        "Review the git diff against the technical specification (SPEC.md).\n"
+        "Check requirements coverage, edge cases, regression risks, and correctness.\n"
+        "Any unmet requirement or severe bug must be reported as a BLOCKER.\n"
+        "If all requirements are satisfied, status must be APPROVED.\n"
+        "Output structured JSON matching the ReviewResult schema.\n\n"
+        "{{PHASE_SKILLS}}\n"
+    ),
+    "architecture": (
+        "# Persona: Architecture & Code Quality Reviewer\n\n"
+        "You are the Architecture & Code Quality Reviewer for MergeFlow.\n"
+        "Review the git diff for architectural design, SOLID principles, separation of concerns, and clean code.\n"
+        "Architectural flaws or severe anti-patterns must be reported as a BLOCKER.\n"
+        "If design and quality are sound, status must be APPROVED.\n"
+        "Output structured JSON matching the ReviewResult schema.\n\n"
+        "{{PHASE_SKILLS}}\n"
+    ),
+    "security": (
+        "# Persona: Application Security Reviewer\n\n"
+        "You are the Application Security Code Reviewer for MergeFlow.\n"
+        "Review the git diff against OWASP Top 10 vulnerabilities, injection flaws, sensitive data leaks, and insecure defaults.\n"
+        "Any exploitable vulnerability or leaked secret must be reported as a BLOCKER.\n"
+        "If no vulnerabilities are detected, status must be APPROVED.\n"
+        "Output structured JSON matching the ReviewResult schema.\n\n"
+        "{{PHASE_SKILLS}}\n"
+    ),
+    "qa_testing": (
+        "# Persona: QA & Test Automation Reviewer\n\n"
+        "You are the QA & Test Automation Code Reviewer for MergeFlow.\n"
+        "Review the git diff for comprehensive unit/integration test coverage, test quality, assertions, and edge case coverage.\n"
+        "Missing critical test coverage or broken test logic must be reported as a BLOCKER.\n"
+        "If tests are sufficient and robust, status must be APPROVED.\n"
+        "Output structured JSON matching the ReviewResult schema.\n\n"
+        "{{PHASE_SKILLS}}\n"
+    ),
 }
 
 
@@ -89,17 +130,33 @@ def load_reviewer_prompt(
             )
         raw_prompt = prompt_path.read_text(encoding="utf-8")
     else:
+        # 1. Check local prompts directory in current working directory (project override)
         prompt_path = Path(DEFAULT_PROMPT_DIR).resolve() / filename
-        if not prompt_path.is_file():
-            # Fallback to local prompts directory relative to current working directory
-            fallback_path = Path("prompts") / filename
-            if fallback_path.is_file():
-                prompt_path = fallback_path.resolve()
+        if prompt_path.is_file():
+            raw_prompt = prompt_path.read_text(encoding="utf-8")
+        elif (Path("prompts") / filename).is_file():
+            prompt_path = (Path("prompts") / filename).resolve()
+            raw_prompt = prompt_path.read_text(encoding="utf-8")
+        elif (PACKAGE_PROMPT_DIR / filename).is_file():
+            # 2. Check bundled package prompts directory
+            prompt_path = (PACKAGE_PROMPT_DIR / filename).resolve()
+            raw_prompt = prompt_path.read_text(encoding="utf-8")
+        else:
+            # 3. Built-in fallback prompt if files cannot be located
+            fallback = FALLBACK_REVIEWER_PROMPTS.get(reviewer.lower().strip())
+            if fallback:
+                logger.warning(
+                    "Reviewer prompt file for persona '%s' not found at %s or %s. Using built-in fallback.",
+                    reviewer,
+                    prompt_path,
+                    PACKAGE_PROMPT_DIR / filename,
+                )
+                raw_prompt = fallback
             else:
                 raise FileNotFoundError(
-                    f"Reviewer prompt file for persona '{reviewer}' not found at: {prompt_path}"
+                    f"Reviewer prompt file for persona '{reviewer}' not found at: {prompt_path} "
+                    f"or package prompt dir: {PACKAGE_PROMPT_DIR}"
                 )
-        raw_prompt = prompt_path.read_text(encoding="utf-8")
 
     persona_norm = reviewer.lower().strip()
     phase_mapping = {

@@ -1,0 +1,2 @@
+recursive-include prompts *.md
+recursive-include skills *.md

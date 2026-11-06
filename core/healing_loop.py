@@ -49,6 +49,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_CI_HEALING_PROMPT_PATH = Path("prompts/ci_healing.md")
+PACKAGE_CI_HEALING_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "ci_healing.md"
 
 
 def _stop_active_spinners(console: Console) -> None:
@@ -86,7 +87,13 @@ def load_ci_healing_prompt(
     Returns:
         System prompt string with injected skills.
     """
-    path = Path(prompt_path) if prompt_path else DEFAULT_CI_HEALING_PROMPT_PATH
+    if prompt_path:
+        path = Path(prompt_path)
+    else:
+        path = DEFAULT_CI_HEALING_PROMPT_PATH
+        if not path.is_file() and PACKAGE_CI_HEALING_PROMPT_PATH.is_file():
+            path = PACKAGE_CI_HEALING_PROMPT_PATH
+
     if not path.is_file():
         raw_prompt = (
             "You are the Autonomous CI Healing Agent of MergeFlow. "

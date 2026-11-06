@@ -203,7 +203,11 @@ def load_discovery_prompt(
     """
     raw_prompt: str
     if prompt_path is None:
-        prompt_path = Path(__file__).resolve().parent.parent / "prompts" / "spec_discovery.md"
+        local_path = Path("prompts") / "spec_discovery.md"
+        if local_path.is_file():
+            prompt_path = local_path
+        else:
+            prompt_path = Path(__file__).resolve().parent.parent / "prompts" / "spec_discovery.md"
 
     if prompt_path.is_file():
         try:

@@ -30,6 +30,7 @@ from vcs.remote_vcs import RemoteVCS, RemoteVCSError
 logger = logging.getLogger(__name__)
 
 DEFAULT_DEVELOPER_PROMPT_PATH = Path("prompts/developer.md")
+PACKAGE_DEVELOPER_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "developer.md"
 
 
 class DevLoopError(Exception):
@@ -95,7 +96,13 @@ def load_developer_prompt(
     Returns:
         System prompt string with injected skills.
     """
-    path = Path(prompt_path) if prompt_path else DEFAULT_DEVELOPER_PROMPT_PATH
+    if prompt_path:
+        path = Path(prompt_path)
+    else:
+        path = DEFAULT_DEVELOPER_PROMPT_PATH
+        if not path.is_file() and PACKAGE_DEVELOPER_PROMPT_PATH.is_file():
+            path = PACKAGE_DEVELOPER_PROMPT_PATH
+
     if not path.is_file():
         # Fallback inline system prompt if file is missing
         raw_prompt = (
